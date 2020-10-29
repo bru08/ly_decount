@@ -3,14 +3,6 @@ use grad cam algorithm with a pretrained model.
 Visualize relevant area in inference task.
 """
 
-
-# %%
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
-import torchvision
-
-# %%
 # %%
 import numpy as np
 import torch
@@ -20,27 +12,8 @@ from torch import nn
 from torchsummary import summary
 from torch.utils.data import DataLoader, Dataset
 import h5py
+from skimage import transform
 
-# %%
-model = torchvision.models.densenet121(pretrained=True, progress=True)
-in_features = model.classifier.in_features
-model.classifier = torch.nn.Sequential(
-  nn.Linear(in_features, 512),
-  nn.ReLU(),
-  nn.Linear(512, 1)
-)
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-# %%
-print("Trying to load weights...")
-try:
-  model.load_state_dict(torch.load("checkpoint_0"))
-except FileNotFoundError:
-  print("warning: no checkpoint to load")
-# %%
-summary(model, (3,199,199))
 # %%
 
 class DataLysto(Dataset):
@@ -89,69 +62,94 @@ val_loader = DataLoader(valid_ds, batch_size=32, shuffle=False)
 
 
 # %%
+model = torchvision.models.densenet121(pretrained=True, progress=True)
+in_features = model.classifier.in_features
+model.classifier = torch.nn.Sequential(
+  nn.Linear(in_features, 512),
+  nn.ReLU(),
+  nn.Linear(512, 1)
+)
+
+
+
+# %%
+print("Trying to load weights...")
+try:
+  model.load_state_dict(torch.load("/home/papa/ly_decount/checkpoints/checkpoint_last.pth")["model_state"])
+  print("Model weights laoded succesfully")
+except FileNotFoundError:
+  print("warning: no checkpoint to load")
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+# %% 
+# register forward hook to get activations
+hook_res = {}
+def get_activation(name):
+    def hook(model, input, output):
+        hook_res[name] = output.detach()
+    return hook
+def get_grads(name):
+    def hook(model, input, output):
+        hook_res[name] = output[0]
+    return hook
+
+model.features.denseblock4.denselayer16.relu2.register_forward_hook(get_activation('activ'))
+model.features.denseblock4.denselayer16.relu2.register_backward_hook(get_grads('grad'))
+
+
+# %%
+# probe with single image
+
+img, t = train_ds[135]
+img_plot = img.transpose(1,2,0)
+img_tens = torch.tensor(img).float().cuda().unsqueeze(0)
+
+# %%
+optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+optim.zero_grad()
+# %%
+# process input
 model.eval()
-model(torch.tensor(img).float().unsqueeze(0).cuda())
+pred = model(img_tens)
+pred_vav = pred.item()
+# backward from prediction
+pred.backward()
 
-img = valid_ds[2][0]
-inp = torch.tensor(img).float().unsqueeze(0).cuda()
-pred_value = model(inp)
-img = img.transpose(1,2,0)
-pred_value, train_ds[0][1]
 
-plt.imshow(img)
 
-pred_value.item(), valid_ds[2][1]
+#%%
+print(f'activation shape: {hook_res["activ"].shape}')
+print(f'gradients shape: {hook_res["grad"].shape}')
 
-optimizer.zero_grad()
-pred_value.backward()
-
-# pull the gradients out of the model
-gradients = model.get_activations_gradient()
-print(gradients.shape)
-
-# pool the gradients across the channels
-pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
-
-# get the activations of the last convolutional layer
-activations = model.get_activations(inp).detach()
-
-# weight the channels by corresponding gradients
-print(activations.shape)
-print(pooled_gradients.shape)
-
+# %%
+# average gradients in each channel
+pooled_gradients = torch.mean(hook_res["grad"], dim=[0,2,3])
+# weight activation by channel gradient weight
 for i in range(len(pooled_gradients)):
-    activations[:, i, :, :] *= pooled_gradients[i]
+    hook_res["activ"][:, i, :, :] *= pooled_gradients[i]
 
-# average the channels of the activations
-heatmap = torch.mean(activations, dim=1).squeeze().cpu()
-
+heatmap = torch.mean(hook_res["activ"], dim=1).squeeze().cpu().numpy()
+# %%
 # relu on top of the heatmap
 # expression (2) in https://arxiv.org/pdf/1610.02391.pdf
 heatmap = np.maximum(heatmap, 0)
-
 # normalize the heatmap
-heatmap /= torch.max(heatmap)
-
+heatmap /= np.max(heatmap)
 # draw the heatmap
-plt.matshow(heatmap.squeeze())
+plt.imshow(heatmap.squeeze())
 
-
-
-from skimage import transform
-heatmap = transform.resize(heatmap, (256, 256))
+# %%
+# adapt heatmatp to input image
+heatmap = transform.resize(heatmap, (199, 199))
 heatmap = np.uint8(255 * heatmap)
-# heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+# %%
 plt.figure(figsize=(6,6))
-plt.imshow(heatmap)
-plt.show()
-
-plt.figure(figsize=(6,6))
-plt.imshow(img)
-plt.imshow(heatmap, alpha=0.7)
+plt.title(f"Pred n lymph: {pred_vav:.1f} vs gt:{t}")
+plt.imshow(img_plot)
+plt.imshow(heatmap, alpha=0.6)
 
 
+# %%
 
-
-
-
-
+# %%

@@ -19,17 +19,19 @@ import h5py
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
+import torchvision.transforms as T
 from datetime import datetime
-
+import os
 # %%
 # hyperparameters
 
 EPOCHS = 20
-BATCH_SIZE = 32
+BATCH_SIZE = 40
 DATA_PATH = Path(__file__).parent.resolve()
 IMG_SIZE = 199
-RESUME = False
+RESUME = True
 
+os.makedirs("./checkpoints/", exist_ok=True)
 
 
 writer = SummaryWriter(log_dir=f"./tb_runs/{datetime.today().isoformat()}")
@@ -59,12 +61,29 @@ class DataLysto(Dataset):
       self.elements_ids = np.arange(self.low, self.up)
 
     def __getitem__(self, idx):
-      img = self.ds["x"][idx].transpose(2,0,1)
+      img = self.ds["x"][idx][13:-13,13:-13]
+      img = self.transforms(img)
       if self.mode in ["train", "valid"]:
         trgt = self.ds["y"][idx]
         return img, trgt
       else:
+
         return img
+    
+    def transforms(self, img):
+      trans_list = []
+      
+
+      if self.mode == "train":
+        trans_list.extend([
+          T.ToPILImage(),
+          T.RandomHorizontalFlip(),
+          T.RandomVerticalFlip(),
+          T.ColorJitter()
+        ])
+      trans_list.append(T.ToTensor())
+      transformer = T.Compose(trans_list)
+      return transformer(img)
 
     def __len__(self):
       return len(self.elements_ids)
@@ -105,7 +124,10 @@ criterion = torch.nn.SmoothL1Loss()
 if RESUME:
   print("Trying to load weights...")
   try:
-    model.load_state_dict(torch.load("./drive/My Drive/checkpoint_0_vgg19hub.pt")["model_state"])
+    chkpt = torch.load("/home/papa/ly_decount/checkpoints/checkpoint_last.pth")
+    model.load_state_dict(chkpt["model_state"])
+    optimizer.load_state_dict(chkpt["optim_state"])
+    print("Model and optim state loaded succesfully.")
   except FileNotFoundError:
     print("warning: no checkpoint to load")
 #%%
@@ -128,14 +150,16 @@ for epoch in range(EPOCHS):
     model.train()
     tmp_loss = 0
     for i, (images, targets) in enumerate(train_loader):
+        # if i > 5:
+        #   break
 
         its = 1 / tf if i > 0 else 0
-        print(f"\rEpoch {epoch}/{EPOCHS} ({i+1}/{len(train_loader)} {its:.2f} it/s) cudamem {torch.cuda.memory_reserved()/1e9:.1f} GiB", end="", flush=True)
+        print(f"\rEpoch {epoch+1}/{EPOCHS} ({i+1}/{len(train_loader)} {its:.2f} it/s) cudamem {torch.cuda.memory_reserved()/1e9:.1f} GiB", end="", flush=True)
         ti = time.time()
         images = images.to(device).float()
         targets = targets.to(device).float()
 
-        out = model(images).clamp(0)  # TODO get a meaningful upper bound
+        out = model(images)
         loss = criterion(out.squeeze(), targets)
 
         optimizer.zero_grad()
@@ -143,10 +167,10 @@ for epoch in range(EPOCHS):
         optimizer.step()
         tmp_loss += loss.item()
         tf = time.time() - ti
-        writer.add_scalar('Loss/train', loss.item()/len(train_loader), epoch * len(train_loader) + i)
+        writer.add_scalar('Loss/train', loss.item(), epoch * len(train_loader) + i)
     train_loss.append(tmp_loss/len(train_loader))
     
-    
+    print("Validation step...")
     # validation
     model.eval()
     with torch.no_grad():
@@ -154,7 +178,11 @@ for epoch in range(EPOCHS):
         preds = []
         trgts = []
         for j, (images, targets) in enumerate(valid_loader):
-            print(f"\rValidating ({j+1}/{len(valid_loader)} {its:.2f} it/s) cudamem {torch.cuda.memory_reserved()/1e9:.1f} GiB", end="", flush=True)
+          # if j > 5:
+          #   break
+            its = 1 / tf if i > 0 else 0
+            print(f"\rValidation: ({j+1}/{len(valid_loader)} {its:.2f} it/s) cudamem {torch.cuda.memory_reserved()/1e9:.1f} GiB", end="", flush=True)
+            ti = time.time()
             images = images.to(device).float()
             targets = targets.to(device).float()
             out = model(images)
@@ -163,6 +191,7 @@ for epoch in range(EPOCHS):
             writer.add_scalar('Loss/valid', loss, epoch * len(valid_loader) + j)
             preds.extend(out.detach().cpu().numpy())
             trgts.extend(targets.cpu().numpy())
+            tf = time.time() - ti
           
         preds = np.array(preds).squeeze()
         trgts = np.array(trgts)
@@ -174,17 +203,16 @@ for epoch in range(EPOCHS):
         writer.add_scalar('Metrics/mae', mean_abs_err, epoch)
         writer.add_scalar('Metrics/mse', mse, epoch)
 
-    print(f"Epoch {epoch+1}/{EPOCHS}, train/valid: {train_loss[-1]}/{valid_loss[-1]}\n")
-    best_valid_loss = valid_loss[-1]
+    print(f"\nEpoch {epoch+1}/{EPOCHS}, train/valid: {train_loss[-1]:.3f}/{valid_loss[-1]:.3f}")
 
     # model backup
     checkpoint = dict(
       model_state=model.state_dict(),
+      optim_state=optimizer.state_dict()
     )
-
-    torch.save(checkpoint, f"./checkpoints/checkpoint_ep{epoch}.pth")
-    if (epoch > 0) and valid_loss[-1] < (best_valid_loss):
-      torch.save(checkpoint, f"./checkpoints/checkpoint_ep{epoch}_best.pth")
+    torch.save(checkpoint, f"./checkpoints/checkpoint_last.pth")
+    if (epoch > 0) and (valid_loss[-1] < min(valid_loss)):
+      torch.save(checkpoint, f"./checkpoints/checkpoint_best.pth")
 
 
 with open("results.csv", "w") as f:
