@@ -3,3 +3,4 @@
 *.h5
 tb_runs
 checkpoints
+.DS_Store
