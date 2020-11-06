@@ -208,7 +208,7 @@ class UNetB(nn.Module):
             filters: no. of filters for convolutional layers
             input_filters: no. of input channels
         """
-        super(UNet, self).__init__()
+        super(UNetB, self).__init__()
         # first block channels size
         initial_filters = (input_filters, filters)
         # channels size for downsampling
@@ -230,18 +230,19 @@ class UNetB(nn.Module):
         self.block7 = conv_block(channels=up_filters, size=(3, 3), N=2)
         self.density_pred = nn.Conv2d(in_channels=filters, out_channels=1,
                                       kernel_size=(1, 1), bias=False)
-        self.cout_regressor = nn.Sequential(
+        self.count_regressor = nn.Sequential(
             #c1
             nn.Conv2d(filters, 2 * filters, kernel_size=(3,3)),
             nn.ReLU(),
-            nn.MaxPool2d(),
+            nn.MaxPool2d((2,2)),
             #c2
             nn.Conv2d(2*filters, 4 * filters, kernel_size=(3,3)),
             nn.ReLU(),
-            nn.MaxPool2d(),
+            nn.MaxPool2d((2,2)),
             #c3
             nn.Conv2d(4*filters, 8 * filters, kernel_size=(3,3)),
             nn.AdaptiveAvgPool2d((1,1)),
+            nn.Flatten(),
             #l1
             nn.Linear(8*filters, 4*filters),
             nn.ReLU(),
@@ -274,7 +275,10 @@ class UNetB(nn.Module):
 
         # density prediction
         block7 = self.block7(block6)
-        return self.density_pred(block7)
+
+        density_pred = self.density_pred(block7)
+        count_pred = self.count_regressor(block7)
+        return density_pred, count_pred
 
 
 # --- PYTESTS --- #

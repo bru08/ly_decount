@@ -1,9 +1,10 @@
 """
-- Take the folders with extracted tiles 1 folder per slide with tiles inside
+Generate Yolo dataset from OPBG annotations data
+- Take the folders with extracted tiles: 1 folder per slide with tiles inside
 - Take the folder with the .csv files from VIA annotations tools
-- match annotation files with patient id, then create annotations looking first to annotaiton file
-- Create symbolic link of tiles present in VIA annotations inside a train/valid folders
-- Create .txt files with annotations for the iamge with same stem in yolo format (normalized with image size)
+- match annotation files with patient id, then create annotations looking first to annotation file
+- Create symbolic link of tiles present in VIA annotations inside a train/valid folder structure
+- Create .txt files with annotations for the image with same stem in yolo format (coordinates are normalized with image size as yolo darknet standard)
 """
 
 import os
