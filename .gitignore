@@ -5,3 +5,9 @@ tb_runs
 checkpoints
 .DS_Store
 *.zip
+annotations_nb_opbg
+.vscode
+dataset_nb_yolo
+__pycache__
+runs
+experiments
