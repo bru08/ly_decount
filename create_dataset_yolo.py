@@ -14,7 +14,7 @@ import json
 import pandas as pd
 
 IMG_SIDE = 512
-BB_SIDE_PX = 14
+BB_SIDE_PX = 18
 l_class_id = 0
 TRAIN_PROP = 0.75
 

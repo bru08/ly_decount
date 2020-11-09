@@ -34,10 +34,10 @@ from models import ResNet_ref_b
 from metrics import compute_reg_metrics, compute_cls_metrics
 
 # %%
-EPOCHS = 70
+EPOCHS = 5
 BATCH_SIZE = 32
 DATA_PATH = "./"
-FREEZE_BASE_RESNET = True
+FREEZE_BASE_RESNET = False
 LR = 1e-3
 checkpoint_path = Path('/home/papa/ly_decount/A_lysto_regression/resnet50_ref_b.pth') # set '' if you dont want to load checkpoints
 diagnostic_run = False
@@ -83,12 +83,12 @@ if FREEZE_BASE_RESNET:
 # load paarams for optim in three groups for other training phases and ability to reload optim state
 
 # first run of resnet_ref_b was without params groups so load a simple optim
-optimizer = Ranger([param for param in model.parameters()])
-# optimizer = Ranger([
-#                   {'params':model.base_modules.parameters(), 'lr':LR},
-#                   {'params':model.cnn_head.parameters(), 'lr':LR},
-#                   {'params':model.reg_head.parameters(), 'lr':LR}
-# ])
+#optimizer = Ranger([param for param in model.parameters()])
+optimizer = Ranger([
+                  {'params':model.base_modules.parameters(), 'lr':1e-6},
+                  {'params':model.cnn_head.parameters(), 'lr':1e-4},
+                  {'params':model.reg_head.parameters(), 'lr':1e-4}
+])
 # lr scheduler
 lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-1, epochs=EPOCHS, steps_per_epoch=len(train_loader))
 
@@ -101,7 +101,7 @@ if checkpoint_path:
   try:
     checkpoint = torch.load(str(checkpoint_path))
     model.load_state_dict(checkpoint["model_state"])
-    optimizer.load_state_dict(checkpoint["optim_state"])
+    #optimizer.load_state_dict(checkpoint["optim_state"])
     epochs_trained = checkpoint["train_epochs"]+1
     print(f"checkpoint loaded succesfully, model already trained for {epochs_trained} epochs")
   except FileNotFoundError:
@@ -117,6 +117,7 @@ except:
 
 # %%
 valid_loss = []
+qks = []
 for epoch in range(start_ep , EPOCHS + start_ep):
 
     model.train()
@@ -141,7 +142,7 @@ for epoch in range(start_ep , EPOCHS + start_ep):
         loss.backward()
         
         optimizer.step()
-        lr_scheduler.step()
+        # lr_scheduler.step()
 
         tmp_loss += loss.item()
         tf = time.time() - ti
@@ -193,6 +194,7 @@ for epoch in range(start_ep , EPOCHS + start_ep):
         writer.add_scalar('Metrics/mse', mse, epoch)
         writer.add_scalar("Metrics/QKappa", qk, epoch)
         writer.add_scalar("Metrics/MCC", mcc, epoch)
+        qks.append(qk)
 
     #print(f"\nEpoch {epoch+1}/{EPOCHS}, train/valid: {train_loss[-1]:.3f}/{valid_loss[-1]:.3f}")
 
@@ -203,7 +205,8 @@ for epoch in range(start_ep , EPOCHS + start_ep):
       train_epochs = epoch
     )
     torch.save(checkpoint, EXP_DIR/run_id/"last.pth")
-    if (epoch > 0) and (valid_loss[-1] < min(valid_loss)):
+    if (epoch > start_ep) and (qks[-1] < min(qks)):
+      print(f"Saving model for best qk = {qks[-1]}")
       torch.save(checkpoint, EXP_DIR/run_id/"best.pth")
 
 
