@@ -12,3 +12,6 @@ __pycache__
 runs
 experiments
 Ranger-Deep-Learning-Optimizer
+*.weights
+*.png
+*.jpg

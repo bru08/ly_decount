@@ -1,6 +1,9 @@
 import os
 import re
 import bisect
+from pathlib import Path
+from PIL import Image
+import matplotlib.pyplot as plt
 
 import numpy as np
 from skimage import io
@@ -92,3 +95,51 @@ class DataLysto(Dataset):
 
     def __len__(self):
       return len(self.elements_ids)
+
+
+class OPBGData(torch.utils.data.Dataset):
+
+    def __init__(self, dataset_dir, mode, transformations):
+        super().__init__()
+        tmp_path = Path(dataset_dir) / mode
+        self.img_files = [tmp_path/x for x in os.listdir(tmp_path) if (tmp_path/x).suffix == ".png"]
+        self.transforms = transformations
+
+    def __getitem__(self, idx):
+        img = np.array(Image.open(self.img_files[idx]).convert("RGB"))
+        
+        annot_file = re.sub(r".png$", r".txt", str(self.img_files[idx]))
+        with open(annot_file, "r") as f:
+            annots = f.read().split("\n")
+        annots = [
+                [
+                    int(float(x) *  (img.shape[0]-1))
+                    for x in y.split(",")[1:3]
+                    ] # take only xy of center in relative coord
+            for y in annots if y
+            ]
+
+        transformed = self.transforms(image=img)
+
+        img = transformed["image"] / 255.
+
+        return img, len(annots), self.grade_opbg(len(annots))
+  
+    def grade_opbg(self, score, breakpoints=[0,5,10,20,50,200], grades=list(range(7))):
+      """
+      Convert number of lymphocytes into one of the seven classes for the opbg
+      """
+      i = bisect.bisect_left(breakpoints, score)
+      return grades[i]
+    
+        
+    def show_example(self):
+        img, n, cls_ = self.__getitem__(0)
+        fig = plt.figure(figsize=(6,6))
+        plt.imshow(img.permute(1,2,0).numpy())
+        plt.title(f"n: {n}, class: {cls_}")
+        plt.show()
+
+    def __len__(self):
+        return len(self.img_files)
+

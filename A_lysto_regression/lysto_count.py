@@ -29,51 +29,84 @@ from ranger import Ranger
 from datetime import datetime
 from pathlib import Path
 from sklearn.metrics import cohen_kappa_score, matthews_corrcoef
-from datasets import DataLysto
+from datasets import DataLysto, OPBGData
 from models import ResNet_ref_b
 from metrics import compute_reg_metrics, compute_cls_metrics
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 # %%
-EPOCHS = 5
-BATCH_SIZE = 32
+EPOCHS = 150
+BATCH_SIZE = 16
 DATA_PATH = "./"
 FREEZE_BASE_RESNET = False
 LR = 1e-3
-checkpoint_path = Path('/home/papa/ly_decount/A_lysto_regression/resnet50_ref_b.pth') # set '' if you dont want to load checkpoints
+checkpoint_path = Path('/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth') # set '' if you dont want to load checkpoints
 diagnostic_run = False
+opbg_dataset_path = Path("/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail")
+ARCH = "resnet_ref_b"
+data_id = "opbg"
+resume = False
+
+# use third gpu
+os.environ['CUDA_VISIBLE_DEVICES']='2'
 
 print(f"Attempt loading checkpoint {checkpoint_path.name}")
 print(f"Training with base model layer frozen: {FREEZE_BASE_RESNET}")
 
-run_id = str(datetime.today().isoformat())
-writer = SummaryWriter(log_dir="./tb_runs/" + run_id)
-print(f"run id: {run_id}")
+timestamp = str(datetime.today().isoformat())
+exp_id = f"{ARCH}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{data_id}_{'freeze' if FREEZE_BASE_RESNET else 'finetuning'}_{timestamp}"
+if not diagnostic_run:
+  writer = SummaryWriter(log_dir="./tb_runs/" + exp_id)
+print(f"run id: {exp_id}")
 
 EXP_DIR = Path("./experiments")
-os.makedirs(EXP_DIR / run_id)
+if not diagnostic_run:
+  os.makedirs(EXP_DIR / exp_id)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# %%
-train_ds = DataLysto(DATA_PATH+"train.h5", "train")
-valid_ds = DataLysto(DATA_PATH+"train.h5", "valid")
-#test_ds = DataLysto(DATA_PATH+"test.h5", "test")
-train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-valid_loader = DataLoader(valid_ds, batch_size=BATCH_SIZE)
-#test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE)
-len(train_ds), len(valid_ds)#, len(test_ds)
+
+transforms = A.Compose([
+    A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05, always_apply=False, p=0.99),
+    A.HorizontalFlip(p=0.5),
+    A.VerticalFlip(p=0.5),
+    ToTensorV2(),
+])
+
+transforms_val = A.Compose([
+    ToTensorV2(),
+])
 
 # %%
+if data_id == "lysto":
+  train_ds = DataLysto(DATA_PATH+"train.h5", "train")
+  valid_ds = DataLysto(DATA_PATH+"train.h5", "valid")
+elif data_id == "opbg":
+  train_ds = OPBGData(opbg_dataset_path, "train", transforms)
+  valid_ds = OPBGData(opbg_dataset_path, "valid", transforms_val)
+else:
+  raise ValueError("dataset non presente")
+
+train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+valid_loader = DataLoader(valid_ds, batch_size=BATCH_SIZE)
+# %%
 # save a sample image from taining dataset
-example = train_ds[0]
-plt.imshow(example[0].permute(1,2,0))
-plt.title("Target: " +  str(example[1]))
-plt.savefig(EXP_DIR / run_id / "train_example")
+if not diagnostic_run:
+  example = train_ds[0]
+  plt.imshow(example[0].permute(1,2,0))
+  plt.title("Target: " +  str(example[1]))
+  plt.savefig(EXP_DIR / exp_id / "train_example")
 
 # %%
 # declare the model to be used
-model = ResNet_ref_b()
+if ARCH == "resnet_ref_b":
+  model = ResNet_ref_b()
+else:
+  raise ValueError("model not implemented")
+
 model.to(device)
+
 
 # freeze original resnet 50 for now
 if FREEZE_BASE_RESNET:
@@ -84,13 +117,14 @@ if FREEZE_BASE_RESNET:
 
 # first run of resnet_ref_b was without params groups so load a simple optim
 #optimizer = Ranger([param for param in model.parameters()])
-optimizer = Ranger([
+optimizer = torch.optim.Adam([
                   {'params':model.base_modules.parameters(), 'lr':1e-6},
-                  {'params':model.cnn_head.parameters(), 'lr':1e-4},
-                  {'params':model.reg_head.parameters(), 'lr':1e-4}
+                  {'params':model.cnn_head.parameters(), 'lr':1e-5},
+                  {'params':model.reg_head.parameters(), 'lr':1e-4},
+                  {'params':model.cls_head.parameters(), 'lr':1e-4}
 ])
 # lr scheduler
-lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-1, epochs=EPOCHS, steps_per_epoch=len(train_loader))
+lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-2, epochs=EPOCHS, steps_per_epoch=len(train_loader))
 
 # losses for regression and classification
 criterion_reg = torch.nn.SmoothL1Loss()
@@ -113,6 +147,8 @@ if checkpoint_path:
 try:
   start_ep = epochs_trained
 except:
+  start_ep = 0
+if not resume:
   start_ep = 0
 
 # %%
@@ -146,8 +182,9 @@ for epoch in range(start_ep , EPOCHS + start_ep):
 
         tmp_loss += loss.item()
         tf = time.time() - ti
-        writer.add_scalar('Loss_reg/train', loss_reg.item(), epoch * len(train_loader) + i)
-        writer.add_scalar('Loss_cls/train', loss_cls.item(), epoch * len(train_loader) + i)
+        if not diagnostic_run:
+          writer.add_scalar('Loss_reg/train', loss_reg.item(), epoch * len(train_loader) + i)
+          writer.add_scalar('Loss_cls/train', loss_cls.item(), epoch * len(train_loader) + i)
     
     
     print("\nValidation step...")
@@ -171,8 +208,9 @@ for epoch in range(start_ep , EPOCHS + start_ep):
           loss_cls = criterion_cls(out_cls, classes).detach().item()
           loss_val += (loss_reg + loss_cls)
           #
-          writer.add_scalar('Loss_reg/valid', loss_reg, epoch * len(valid_loader) + j)
-          writer.add_scalar('Loss_cls/valid', loss_cls, epoch * len(valid_loader) + j)
+          if not diagnostic_run:
+            writer.add_scalar('Loss_reg/valid', loss_reg, epoch * len(valid_loader) + j)
+            writer.add_scalar('Loss_cls/valid', loss_cls, epoch * len(valid_loader) + j)
           # save 4 metrics
           valid_loss.append(loss_val)
           preds_reg.extend(out_reg.detach().cpu().numpy())
@@ -188,12 +226,13 @@ for epoch in range(start_ep , EPOCHS + start_ep):
 
         cae, mae, mse = compute_reg_metrics(preds_reg, trgts_reg)
         qk, mcc = compute_cls_metrics(preds_cls, trgts_cls)
+        if not diagnostic_run:
+          writer.add_scalar('Metrics/abs_err', cae, epoch)
+          writer.add_scalar('Metrics/mae', mae, epoch)
+          writer.add_scalar('Metrics/mse', mse, epoch)
+          writer.add_scalar("Metrics/QKappa", qk, epoch)
+          writer.add_scalar("Metrics/MCC", mcc, epoch)
 
-        writer.add_scalar('Metrics/abs_err', cae, epoch)
-        writer.add_scalar('Metrics/mae', mae, epoch)
-        writer.add_scalar('Metrics/mse', mse, epoch)
-        writer.add_scalar("Metrics/QKappa", qk, epoch)
-        writer.add_scalar("Metrics/MCC", mcc, epoch)
         qks.append(qk)
 
     #print(f"\nEpoch {epoch+1}/{EPOCHS}, train/valid: {train_loss[-1]:.3f}/{valid_loss[-1]:.3f}")
@@ -204,10 +243,11 @@ for epoch in range(start_ep , EPOCHS + start_ep):
       optim_state=optimizer.state_dict(),
       train_epochs = epoch
     )
-    torch.save(checkpoint, EXP_DIR/run_id/"last.pth")
-    if (epoch > start_ep) and (qks[-1] < min(qks)):
-      print(f"Saving model for best qk = {qks[-1]}")
-      torch.save(checkpoint, EXP_DIR/run_id/"best.pth")
+    if not diagnostic_run:
+      torch.save(checkpoint, EXP_DIR/exp_id/"last.pth")
+      if (epoch > start_ep) and (qks[-1] < min(qks)):
+        print(f"Saving model for best qk = {qks[-1]}")
+        torch.save(checkpoint, EXP_DIR/exp_id/"best.pth")
 
 
 #######

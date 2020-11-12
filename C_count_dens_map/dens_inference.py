@@ -57,7 +57,7 @@ PRETRAIN = "lysto" # or lysto - imagenet only for resnet50
 lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
 FREEZE_ENCODER = True
 DATASET_DIR = "/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail" 
-checkpoint_path = "/home/papa/ly_decount/C_count_dens_map/experiments/dens_count_resnet50_lysto_ep_120_bs_16_2020-11-11T03:25:01.266188/"
+checkpoint_path = "/home/papa/ly_decount/C_count_dens_map/experiments/dens_count_resnet50_lysto_ep_120_bs_16__distr_2020-11-11T20:09:50.361283/last.pth"
 LR = 1e-3
 EPOCHS = 5
 BATCH_SIZE = 16
@@ -143,10 +143,14 @@ model = smp.Unet("resnet50", decoder_attention_type="scse")
 model.to(device)
 
 # %%
-checkpoint = torch.load(checkpoint_path + "best.pth")
+checkpoint = torch.load(checkpoint_path)
+model_state_dict = OrderedDict()
+for k,v in checkpoint["model"].items():
+    model_state_dict[k.split(".",1)[1]] = v
+# %%
 print(list(checkpoint.keys()))
 print(f"Epochs trained {checkpoint['epochs']}")
-model.load_state_dict(checkpoint["model"])
+model.load_state_dict(model_state_dict)
 
 #%%
 # %%
@@ -177,7 +181,7 @@ fig, ax = plt.subplots(ncols=2,nrows=2, figsize=(12,12))
 img_d = img.cpu().permute(1,2,0).numpy()
 msk_out = out.squeeze().cpu().numpy()
 ax[0,0].imshow(img_d)
-ax[0,0].imshow(msk_out>msk_out.max()*0.3, alpha=0.7)
+ax[0,0].imshow(msk_out>msk_out.max()*0.5, alpha=0.7)
 ax[0,0].set_title("Image and density map overlay thresholded 0.3*max")
 ax[0,1].imshow(msk_out)
 ax[0,1].set_title(f"Predicted density map, (Integral/d; {msk_out.sum().item()/100:.2f})")
