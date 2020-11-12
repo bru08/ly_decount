@@ -24,6 +24,7 @@ from collections import OrderedDict
 import matplotlib.pyplot as plt
 from pathlib import Path
 import os
+import argparse
 from PIL import Image
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
@@ -65,6 +66,15 @@ EPOCHS = 120
 BATCH_SIZE = 16
 timestamp = str(datetime.today().isoformat())
 TRIAL_RUN = False
+
+# select gpu to run the process
+parser = argparse.ArgumentParser()
+parser.add_argument('-g', '--gpu-id', default='0', type=str, metavar='N')
+parser.add_argument('-e', '--encoder-architecture', default="resnet50", type=str)
+parser.add_argument('p', '--weights', default='imagenet', type='str')
+args = parser.parse_args()
+os.environ['CUDA_VISIBLE_DEVICES']=args.gpu_id
+ENCODER_ARCH = args.encoder_architecture
 
 exp_title = f"dens_count_{ENCODER_ARCH}_{PRETRAIN}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{timestamp}"
 writer = SummaryWriter(log_dir=f"./tb_runs/{exp_title}")
@@ -126,7 +136,6 @@ class DMapData(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.img_files)
-
 
 
 
@@ -227,6 +236,9 @@ for epoch in range(EPOCHS):
     print("\nValidation step...")
     model.eval()
     with torch.no_grad():
+        cls_met = dict(pred=[],trgt=[])
+        reg_met = dict(pred=[],trgt=[])
+
         for j, (img, mask) in enumerate(loader_valid):
             if TRIAL_RUN and j>3:
                 break
@@ -240,19 +252,35 @@ for epoch in range(EPOCHS):
             segm_loss = segm_criterion(out, mask)
             conservation_loss = prob_cons_criterion(out.sum(dim=[1,2,3]), mask.sum(dim=[1,2,3]))
 
-    
+
+            counts_pred = out.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
+            counts_gt = mask.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
+            reg_met["pred"].extend(counts_pred)
+            reg_met["trgt"].extend(counts_gt)
+
             # store losses
             losses_val["segment"].append(segm_loss.item())
             losses_val["conserv"].append(conservation_loss.item())
             writer.add_scalar("segmentation_loss/Valid", segm_loss.item(), epoch * len(loader_valid) + j)
             writer.add_scalar("regression_loss/Valid", conservation_loss.item(), epoch * len(loader_valid) + j)
+
+
             # log 
-            
             print(
                 f"\rValid epoch {epoch + 1}/{EPOCHS} ({j+1}/{len(loader_valid)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
                 end="", flush=True
                 )
+        cae, mae, mse = compute_reg_metrics(preds_reg, trgts_reg)
+        qk, mcc = compute_cls_metrics(preds_cls, trgts_cls)
+        writer.add_scalar("cae", cae, epoch)
+        writer.add_scalar("mae", mae, epoch)
+        writer.add_scalar("mse", mse, epoch)
+        writer.add_scalar("qkappa", qk, epoch)
+        writer.add_scalar("mcc", mcc, epoch)
+
     
+
+
     # save checkpoint
     last_checkpoint = {
         "model":model.state_dict(),
