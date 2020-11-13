@@ -32,34 +32,17 @@ from scipy.ndimage import gaussian_filter
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from datetime import datetime
+from metrics import compute_cls_metrics, compute_reg_metrics
+from datasets import DMapData
+from utils import load_lysto_weights
 
-# %%
-
-def load_lysto_weights(model, state_path):
-    assert ENCODER_ARCH == "resnet50"
-    state = torch.load(state_path)["model_state"]
-    #
-    state_keys = [x for x in state.keys() if x.startswith("base_modules")]
-    model_keys = list(model.encoder.state_dict().keys())
-    #
-    state_renamed = OrderedDict()
-    for i, skey in enumerate(state_keys[1:]):
-        try:
-            state_renamed[model_keys[i+1]] = state[skey]
-        except Exception as e:
-            print(e)
-    # needed for toch segmentation models that by defualt assume resnets have fc layers at the end
-    state_renamed["fc.bias"] = 1
-    state_renamed["fc.weight"] = 1
-    #
-    model.encoder.load_state_dict(state_renamed, strict=False)
-    print("Succesfully converted and loaded resnet50 weights from lysto pretraining")
 
 # %%
 ENCODER_ARCH = "resnet50"
 PRETRAIN = "lysto" # or lysto - imagenet only for resnet50
 lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
 FREEZE_ENCODER = True
+checkpoint_path = ""
 DATASET_DIR = "/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail" 
 LR = 1e-3
 EPOCHS = 120
@@ -71,73 +54,19 @@ TRIAL_RUN = False
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--gpu-id', default='0', type=str, metavar='N')
 parser.add_argument('-e', '--encoder-architecture', default="resnet50", type=str)
-parser.add_argument('p', '--weights', default='imagenet', type='str')
+parser.add_argument('-p', '--weights', default='imagenet', type=str)
+parser.add_argument('-r', '--resume', default='', type=str)
+parser.add_argument('-f', '--freeze-encoder', default=False, type=bool)
 args = parser.parse_args()
 os.environ['CUDA_VISIBLE_DEVICES']=args.gpu_id
 ENCODER_ARCH = args.encoder_architecture
+PRETRAIN = args.weights
+FREEZE_ENCODER = args.freeze_encoder
 
-exp_title = f"dens_count_{ENCODER_ARCH}_{PRETRAIN}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{timestamp}"
+exp_title = f"dens_count_{ENCODER_ARCH}_{PRETRAIN}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{'resume' if args.resume else 'scratch'}_{timestamp}"
 writer = SummaryWriter(log_dir=f"./tb_runs/{exp_title}")
 EXP_DIR = f"./experiments/{exp_title}/"
 os.makedirs(EXP_DIR)
-
-# %%
-class DMapData(torch.utils.data.Dataset):
-
-    def __init__(self, dataset_dir, mode, transformations, point_label_init=100, lbl_sigma_gauss=1):
-        super().__init__()
-        tmp_path = Path(dataset_dir) / mode
-        self.pt_lbl_init = point_label_init
-        self.lbl_sigma_gauss = lbl_sigma_gauss
-        self.img_files = [tmp_path/x for x in os.listdir(tmp_path) if (tmp_path/x).suffix == ".png"]
-        self.transforms = transformations
-
-    def __getitem__(self, idx):
-        img = np.array(Image.open(self.img_files[idx]).convert("RGB"))
-        
-        annot_file = re.sub(r".png$", r".txt", str(self.img_files[idx]))
-        with open(annot_file, "r") as f:
-            annots = f.read().split("\n")
-        annots = [
-                [
-                    int(float(x) *  (img.shape[0]-1))
-                    for x in y.split(",")[1:3]
-                    ] # take only xy of center in relative coord
-            for y in annots if y
-            ]
-        mask_lbl = self.generate_label_mask(img, annots)
-
-        transformed = self.transforms(image=img, mask=mask_lbl)
-
-        img = transformed["image"] / 255.
-        mask = transformed["mask"]
-
-        return img, mask
-
-    def generate_label_mask(self, img, annotations):
-        mask = np.zeros(img.shape[:2])
-        s = self.lbl_sigma_gauss
-        for annot in annotations:
-
-            mask[annot[1], annot[0]] = self.pt_lbl_init
-        mask_blur = gaussian_filter(mask, (s,s), order=0)
-        mask_blur /= mask_blur.sum()
-        mask_blur *= (100 * len(annotations))
-        return mask_blur
-        
-    def show_example(self, with_mask=True):
-        img, lbl = self.__getitem__(1)
-        fig = plt.figure(figsize=(6,6))
-        plt.imshow(img.permute(1,2,0).numpy())
-        if with_mask:
-            plt.imshow(lbl.numpy(), alpha=0.5)
-        plt.title(f"Sum: {lbl.sum():.2f}")
-        plt.show()
-
-    def __len__(self):
-        return len(self.img_files)
-
-
 
 # %%
 # define albumentations transpose
@@ -152,15 +81,16 @@ dataset_train = DMapData(DATASET_DIR, "train", transforms, lbl_sigma_gauss=6)
 dataset_valid = DMapData(DATASET_DIR, "valid", transforms, lbl_sigma_gauss=6)
 # dataset_train.show_example(False)
 loader_train = DataLoader(dataset_train, batch_size=BATCH_SIZE, shuffle=True)
-loader_valid = DataLoader(dataset_valid, batch_size=BATCH_SIZE, shuffle=True)
+loader_valid = DataLoader(dataset_valid, batch_size=BATCH_SIZE)
 # %%
-if PRETRAIN == "imagenet":
+if (not args.resume) and (PRETRAIN == "imagenet"):
     model = smp.Unet(ENCODER_ARCH, encoder_weights=PRETRAIN, decoder_attention_type="scse")
+    print("starting training with iamgenet weights")
 else:
     model = smp.Unet(ENCODER_ARCH, decoder_attention_type="scse")
 
 if PRETRAIN == "lysto":
-    load_lysto_weights(model, lysto_checkpt_path)
+    load_lysto_weights(model, lysto_checkpt_path, "resnet50")
 
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,7 +102,7 @@ if FREEZE_ENCODER:
 
 
 optimizer = torch.optim.Adam([
-                  {'params': model.encoder.parameters(), 'lr':LR},
+                  {'params': model.encoder.parameters(), 'lr':LR*1e-3},
                   {'params': model.decoder.parameters(), 'lr':LR},
                   {'params': model.segmentation_head.parameters(), 'lr':LR}
 ])
@@ -181,22 +111,31 @@ prob_cons_criterion = torch.nn.L1Loss()
 
 # %%
 # warmp up 
-print("Warm up...")
-for i, (img, mask) in enumerate(loader_train):
-    img = img.to(device).float()
-    mask = mask.to(device).unsqueeze(1).float()
-    out = model(img)
-    segm_loss = segm_criterion(out, mask)
-    optimizer.zero_grad()
-    segm_loss.backward()
-    optimizer.step()
+start_ep = 0
+if args.resume:
+    checkpoint = torch.load(args.resume)
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    print(f"loaded checkpoint {args.resume}")
+    start_ep = checkpoint["epochs"]
+else:
+    print("Warm up...")
+    for i, (img, mask) in enumerate(loader_train):
+        print(f"\rWarming up {i+1}/{len(loader_train)}", end="", flush=True)
+        img = img.to(device).float()
+        mask = mask.to(device).unsqueeze(1).float()
+        out = model(img)
+        segm_loss = segm_criterion(out, mask)
+        optimizer.zero_grad()
+        segm_loss.backward()
+        optimizer.step()
 
-print("Starting training..")
+print("\nStarting training..")
 # %%
 losses_tr = dict(segment=[], conserv=[])
 losses_val = dict(segment=[], conserv=[])
 best_cons_loss = np.inf
-for epoch in range(EPOCHS):
+for epoch in range(start_ep, EPOCHS + start_ep):
     if TRIAL_RUN and epoch >3:
         break
 
@@ -224,7 +163,7 @@ for epoch in range(EPOCHS):
 
         # log 
         print(
-            f"\rEpoch {epoch + 1}/{EPOCHS} ({i+1}/{len(loader_train)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
+            f"\rEpoch {epoch + 1}/{EPOCHS+start_ep} ({i+1}/{len(loader_train)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
             end="", flush=True
             )
         # store losses
@@ -236,7 +175,6 @@ for epoch in range(EPOCHS):
     print("\nValidation step...")
     model.eval()
     with torch.no_grad():
-        cls_met = dict(pred=[],trgt=[])
         reg_met = dict(pred=[],trgt=[])
 
         for j, (img, mask) in enumerate(loader_valid):
@@ -267,16 +205,17 @@ for epoch in range(EPOCHS):
 
             # log 
             print(
-                f"\rValid epoch {epoch + 1}/{EPOCHS} ({j+1}/{len(loader_valid)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
+                f"\rValid epoch {epoch + 1}/{EPOCHS + start_ep} ({j+1}/{len(loader_valid)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
                 end="", flush=True
                 )
-        cae, mae, mse = compute_reg_metrics(preds_reg, trgts_reg)
-        qk, mcc = compute_cls_metrics(preds_cls, trgts_cls)
-        writer.add_scalar("cae", cae, epoch)
-        writer.add_scalar("mae", mae, epoch)
-        writer.add_scalar("mse", mse, epoch)
-        writer.add_scalar("qkappa", qk, epoch)
-        writer.add_scalar("mcc", mcc, epoch)
+        cae, mae, mse = compute_reg_metrics(reg_met)
+        qk, mcc, acc = compute_cls_metrics(reg_met)
+        writer.add_scalar("metrics/cae", cae, epoch)
+        writer.add_scalar("metrics/mae", mae, epoch)
+        writer.add_scalar("metrics/mse", mse, epoch)
+        writer.add_scalar("metrics/qkappa", qk, epoch)
+        writer.add_scalar("metrics/mcc", mcc, epoch)
+        writer.add_scalar("metrics/accuracy",acc,epoch)
 
     
 

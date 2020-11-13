@@ -1,6 +1,6 @@
 # %%
 import numpy as np
-from sklearn.metrics import cohen_kappa_score, matthews_corrcoef
+from sklearn.metrics import cohen_kappa_score, matthews_corrcoef, accuracy_score
 import bisect
 
 def compute_reg_metrics(res_dict):
@@ -25,5 +25,6 @@ def compute_cls_metrics(res_dict):
 
   qk = cohen_kappa_score(preds, targets, weights="quadratic")
   mcc = matthews_corrcoef(preds, targets)
-  return qk, mcc
+  acc= accuracy_score(preds, targets)
+  return qk, mcc, acc
 

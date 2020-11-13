@@ -36,20 +36,20 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 # %%
-EPOCHS = 150
+EPOCHS = 120
 BATCH_SIZE = 16
 DATA_PATH = "./"
 FREEZE_BASE_RESNET = False
 LR = 1e-3
-checkpoint_path = Path('/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth') # set '' if you dont want to load checkpoints
+checkpoint_path = Path('/home/papa/ly_decount/A_lysto_regression/experiments/resnet_ref_b_ep_150_bs_16_opbg_finetuning_2020-11-12T02:25:15.538611/last.pth') # set '' if you dont want to load checkpoints
 diagnostic_run = False
 opbg_dataset_path = Path("/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail")
 ARCH = "resnet_ref_b"
 data_id = "opbg"
 resume = False
 
-# use third gpu
-os.environ['CUDA_VISIBLE_DEVICES']='2'
+# use gpu
+os.environ['CUDA_VISIBLE_DEVICES']='3'
 
 print(f"Attempt loading checkpoint {checkpoint_path.name}")
 print(f"Training with base model layer frozen: {FREEZE_BASE_RESNET}")
@@ -119,9 +119,9 @@ if FREEZE_BASE_RESNET:
 #optimizer = Ranger([param for param in model.parameters()])
 optimizer = torch.optim.Adam([
                   {'params':model.base_modules.parameters(), 'lr':1e-6},
-                  {'params':model.cnn_head.parameters(), 'lr':1e-5},
-                  {'params':model.reg_head.parameters(), 'lr':1e-4},
-                  {'params':model.cls_head.parameters(), 'lr':1e-4}
+                  {'params':model.cnn_head.parameters(), 'lr':1e-3},
+                  {'params':model.reg_head.parameters(), 'lr':1e-3},
+                  {'params':model.cls_head.parameters(), 'lr':1e-3}
 ])
 # lr scheduler
 lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-2, epochs=EPOCHS, steps_per_epoch=len(train_loader))
@@ -131,25 +131,20 @@ criterion_reg = torch.nn.SmoothL1Loss()
 criterion_cls = torch.nn.CrossEntropyLoss()
 
 # %%
+start_ep = 0
 if checkpoint_path:
   try:
     checkpoint = torch.load(str(checkpoint_path))
     model.load_state_dict(checkpoint["model_state"])
     #optimizer.load_state_dict(checkpoint["optim_state"])
-    epochs_trained = checkpoint["train_epochs"]+1
-    print(f"checkpoint loaded succesfully, model already trained for {epochs_trained} epochs")
+    start_ep = checkpoint["train_epochs"]+1
+    print(f"checkpoint loaded succesfully, model already trained for {start_ep} epochs")
   except FileNotFoundError:
     print("warning: no checkpoint to load")
 
 
 # %%
 # if model loaded start from last epoch, else start from 0
-try:
-  start_ep = epochs_trained
-except:
-  start_ep = 0
-if not resume:
-  start_ep = 0
 
 # %%
 valid_loss = []
