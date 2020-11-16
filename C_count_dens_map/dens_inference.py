@@ -138,8 +138,8 @@ loader_valid = DataLoader(dataset_valid, batch_size=BATCH_SIZE, shuffle=True)
 # %%
 # isntance model
 #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
-model = smp.Unet("resnet50", decoder_attention_type="scse")
+device = torch.device("cuda")
+model = smp.Unet("efficientnet-b3", decoder_attention_type="scse")
 model.to(device)
 
 # %%
@@ -148,9 +148,10 @@ model_state_dict = OrderedDict()
 for k,v in checkpoint["model"].items():
     model_state_dict[k.split(".",1)[1]] = v
 # %%
+# TODO beware what model you are loading normal/dataparallel
 print(list(checkpoint.keys()))
 print(f"Epochs trained {checkpoint['epochs']}")
-model.load_state_dict(model_state_dict)
+model.load_state_dict(checkpoint["model"])
 
 #%%
 # %%
@@ -181,7 +182,7 @@ fig, ax = plt.subplots(ncols=2,nrows=2, figsize=(12,12))
 img_d = img.cpu().permute(1,2,0).numpy()
 msk_out = out.squeeze().cpu().numpy()
 ax[0,0].imshow(img_d)
-ax[0,0].imshow(msk_out>msk_out.max()*0.5, alpha=0.7)
+ax[0,0].imshow(msk_out>msk_out.max()*0.2, alpha=0.7)
 ax[0,0].set_title("Image and density map overlay thresholded 0.3*max")
 ax[0,1].imshow(msk_out)
 ax[0,1].set_title(f"Predicted density map, (Integral/d; {msk_out.sum().item()/100:.2f})")

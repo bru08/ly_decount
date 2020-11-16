@@ -14,6 +14,7 @@ Values for t and s are hyperparamters.
 """
 # %%
 import torch
+import json
 from torch import nn
 import time
 import re
@@ -38,37 +39,64 @@ from utils import load_lysto_weights
 
 
 # %%
-ENCODER_ARCH = "resnet50"
-PRETRAIN = "lysto" # or lysto - imagenet only for resnet50
-lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
-FREEZE_ENCODER = True
-checkpoint_path = ""
-DATASET_DIR = "/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail" 
-LR = 1e-3
-EPOCHS = 120
-BATCH_SIZE = 16
-timestamp = str(datetime.today().isoformat())
-TRIAL_RUN = False
+# ------------
+# A - SETTINGS
+# ------------
 
-# select gpu to run the process
+# fixed settings
+DATASET_DIR = "/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail" 
+BASE_DIR = Path(__file__).parent.resolve()
+lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth",
+
+# command line arguments
 parser = argparse.ArgumentParser()
-parser.add_argument('-g', '--gpu-id', default='0', type=str, metavar='N')
-parser.add_argument('-e', '--encoder-architecture', default="resnet50", type=str)
-parser.add_argument('-p', '--weights', default='imagenet', type=str)
-parser.add_argument('-r', '--resume', default='', type=str)
-parser.add_argument('-f', '--freeze-encoder', default=False, type=bool)
+parser.add_argument('-g', '--gpu-id',               default='0', type=str, metavar='N')
+parser.add_argument('-en', '--encoder-architecture',default="resnet50", type=str, help="encoder architecture param for pytorch_segmentation_models")
+parser.add_argument('-ep', '--epochs',              default=120, type=int)
+parser.add_argument('-p', '--weights',              default='imagenet', type=str)
+parser.add_argument('-r', '--resume',               default='', type=str, help="path to checkpoint to use to resume trainig")
+parser.add_argument('-f', '--freeze-encoder',       default=False, type=bool)
+parser.add_argument('-s', '--label-sigma',          default=1, type=float, help="gauss kernel sigma applied to label mask")
+parser.add_argument('-d', '--label-value',          default=100, type=float, help="initialization value for pixel with annotation")
+parser.add_argument('-bs', '--batch-size',          default=16, type=int)
+parser.add_argument('-dr', '--diagnostic-run',      default=False, type=bool, help="whether to run just few iteration to see if everything is working")
+parser.add_argument('-lr', '--learning-rate',       default=1e-3, type=float)
+parser.add_argument('-o', '--optimizer',            default="adam", type=str)
+parser.add_argument('-ua', '--decoder-scse',        default=True, type=bool, help="whether to use scse attention blocks in UNet decoder")
 args = parser.parse_args()
+
+# use the cl arguments
+# set up which gpu to use
 os.environ['CUDA_VISIBLE_DEVICES']=args.gpu_id
 ENCODER_ARCH = args.encoder_architecture
 PRETRAIN = args.weights
 FREEZE_ENCODER = args.freeze_encoder
+TRIAL_RUN = args.diagnostic_run
+LR = args.learning_rate
+EPOCHS = args.epochs
+BATCH_SIZE = args.batch_size
+LBL_SIGMA = args.label_sigma
+SCSE = args.decoder_scse
+OPTIMIZER = args.optimizer
 
+# set up logging folders/files
+timestamp = str(datetime.today().isoformat())
 exp_title = f"dens_count_{ENCODER_ARCH}_{PRETRAIN}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{'resume' if args.resume else 'scratch'}_{timestamp}"
 writer = SummaryWriter(log_dir=f"./tb_runs/{exp_title}")
-EXP_DIR = f"./experiments/{exp_title}/"
-os.makedirs(EXP_DIR)
+EXP_DIR = BASE_DIR / "experiments" / exp_title
+os.makedirs(EXP_DIR, exist_ok=False)
 
+# saving settings as json
+with open(EXP_DIR / "settings.json", "w") as fp:
+    tmp = vars(args)
+    tmp["exp_title"] = exp_title
+    json.dump(tmp, fp, indent=4)
+
+#####################################
 # %%
+# ------------
+# B - DATA PREPARATION
+# ------------
 # define albumentations transpose
 # execution is first to last
 transforms = A.Compose([
@@ -77,12 +105,21 @@ transforms = A.Compose([
     A.VerticalFlip(p=0.5),
     ToTensorV2(),
 ])
-dataset_train = DMapData(DATASET_DIR, "train", transforms, lbl_sigma_gauss=6)
-dataset_valid = DMapData(DATASET_DIR, "valid", transforms, lbl_sigma_gauss=6)
+transforms_val = A.Compose([
+    ToTensorV2(),
+])
+
+dataset_train = DMapData(DATASET_DIR, "train", transforms, lbl_sigma_gauss=LBL_SIGMA)
+dataset_valid = DMapData(DATASET_DIR, "valid", transforms_val, lbl_sigma_gauss=LBL_SIGMA)
 # dataset_train.show_example(False)
 loader_train = DataLoader(dataset_train, batch_size=BATCH_SIZE, shuffle=True)
 loader_valid = DataLoader(dataset_valid, batch_size=BATCH_SIZE)
+
+
 # %%
+# ----------------------------------
+# C - MODEL, CHECKPOINTS AND RELATED
+# ----------------------------------
 if (not args.resume) and (PRETRAIN == "imagenet"):
     model = smp.Unet(ENCODER_ARCH, encoder_weights=PRETRAIN, decoder_attention_type="scse")
     print("starting training with iamgenet weights")
@@ -100,12 +137,18 @@ if FREEZE_ENCODER:
     for param in model.encoder.parameters():
         param.requires_grad = False
 
-
-optimizer = torch.optim.Adam([
-                  {'params': model.encoder.parameters(), 'lr':LR*1e-3},
+param_groups = [
+                  {'params': model.encoder.parameters(), 'lr':LR*1e-2},
                   {'params': model.decoder.parameters(), 'lr':LR},
                   {'params': model.segmentation_head.parameters(), 'lr':LR}
-])
+]
+
+if OPTIMIZER == "adam":
+    optimizer = torch.optim.Adam(param_groups)
+else:
+    raise ValueError("Specified optimizer not implemented")
+
+
 segm_criterion = torch.nn.MSELoss()
 prob_cons_criterion = torch.nn.L1Loss()
 
@@ -132,6 +175,10 @@ else:
 
 print("\nStarting training..")
 # %%
+# ----------------------------------
+# D - TRAINING SECTION
+# ----------------------------------
+
 losses_tr = dict(segment=[], conserv=[])
 losses_val = dict(segment=[], conserv=[])
 best_cons_loss = np.inf

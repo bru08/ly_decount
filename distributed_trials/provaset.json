@@ -1,0 +1,11 @@
+{
+    "gpu_id": "0",
+    "encoder_architecture": "ciao",
+    "weights": "imagenet",
+    "resume": "",
+    "freeze_encoder": false,
+    "label_sigma": 1,
+    "label_value": 100,
+    "batch_size": 16,
+    "diagnostic_run": false
+}
