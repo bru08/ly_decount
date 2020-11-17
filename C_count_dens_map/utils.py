@@ -3,15 +3,17 @@ from collections import OrderedDict
 
 def load_lysto_weights(model, state_path, encoder_arch):
     assert encoder_arch == "resnet50"
-    state = torch.load(state_path)["model_state"]
+    checkpoint = torch.load(state_path)
+    print(list(checkpoint.keys()))
+    model_state = checkpoint["model_state"]
     #
-    state_keys = [x for x in state.keys() if x.startswith("base_modules")]
+    state_keys = [x for x in model_state.keys() if x.startswith("base_modules")]
     model_keys = list(model.encoder.state_dict().keys())
     #
     state_renamed = OrderedDict()
     for i, skey in enumerate(state_keys[1:]):
         try:
-            state_renamed[model_keys[i+1]] = state[skey]
+            state_renamed[model_keys[i+1]] = model_state[skey]
         except Exception as e:
             print(e)
     # needed for toch segmentation models that by defualt assume resnets have fc layers at the end

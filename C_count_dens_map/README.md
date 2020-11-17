@@ -12,3 +12,14 @@ python dens_count.py
 
 -e : ["resnet50", "se_resnet50",
 # Dens map distributed
+
+
+### launch experiment with efficient b0 on 2 gpu
+
+
+python dens_count_parallel.py -g 0,1 -en efficientnet-b0 -f True -s 6 -bs 52
+
+### experiment with efficientnet b4 on 2 gpu
+
+
+python dens_count_parallel.py -g 2,3 -en efficientnet-b4 -f True -s 6 -bs 52

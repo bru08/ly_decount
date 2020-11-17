@@ -29,6 +29,13 @@ from torch.utils.data import Dataset, DataLoader
 from scipy.ndimage import gaussian_filter
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+
+from scipy import ndimage as ndi
+from skimage.segmentation import watershed
+from skimage.feature import peak_local_max
+from skimage import (
+    color, feature, filters, measure, morphology, segmentation, util
+)
 # %%
 
 def load_lysto_weights(model, state_path):
@@ -51,13 +58,38 @@ def load_lysto_weights(model, state_path):
     model.encoder.load_state_dict(state_renamed, strict=False)
     print("Succesfully converted and loaded resnet50 weights from lysto pretraining")
 
+def dens_map_to_detection(mask):
+    # threshold mask
+    t = filters.threshold_otsu(msk_out)
+    lymph = msk_out > t
+    # watershed transform
+    distance = ndi.distance_transform_edt(lymph)
+    local_maxi = peak_local_max(distance, indices=False, min_distance=7)
+    markers = measure.label(local_maxi)
+    segmented_cells = watershed(-distance, markers, mask=lymph)
+    # center for each connected components
+    centers = []
+    for elem in np.unique(segmented_cells):
+        if elem != 0:
+            centers.append(np.argwhere(segmented_cells==elem).mean(axis=0))
+    centers = np.array(centers)
+    return centers
+
+def plot_dens_detection(img, mask):
+    centers = dens_map_to_detection(mask)
+    plt.figure(figsize=(7,7))
+    plt.imshow(img)
+    plt.scatter(*centers.T[::-1], marker="+", c="green", s=50)
+    plt.title(f"Detected objects: {len(centers)}")
+    plt.show()
+
 # %%
 ENCODER_ARCH = "resnet50"
 PRETRAIN = "lysto" # or lysto - imagenet only for resnet50
 lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
 FREEZE_ENCODER = True
 DATASET_DIR = "/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail" 
-checkpoint_path = "/home/papa/ly_decount/C_count_dens_map/experiments/dens_count_efficientnet-b3_imagenet_ep_120_bs_16_2020-11-13T00:20:02.833902/last.pth"
+checkpoint_path = "/home/papa/ly_decount/C_count_dens_map/experiments/dens_count_efficientnet-b3_imagenet_ep_240_bs_18_resume_2020-11-17T02:39:07.243330/last.pth"
 LR = 1e-3
 EPOCHS = 5
 BATCH_SIZE = 16
@@ -162,21 +194,12 @@ plt.plot(checkpoint["losses_tr"]["segment"])
 plt.plot(checkpoint["losses_tr"]["conserv"])
 #plt.yscale("log")
 # %%
-img , msk = dataset_valid[5]
+#### TRY INFERENCE
+img , msk = dataset_valid[50]
 # %%
 model.eval()
 with torch.no_grad():
     out = model(img.unsqueeze(0).to(device))
-# %%
-plt.figure(figsize=(6,6))
-plt.imshow(img.cpu().permute(1,2,0).numpy())
-# %%
-plt.figure(figsize=(6,6))
-plt.imshow(msk.numpy())
-# %%
-plt.imshow(out.squeeze().cpu().numpy())
-# %%
-out.sum(), msk.sum()
 # %%
 fig, ax = plt.subplots(ncols=2,nrows=2, figsize=(12,12))
 img_d = img.cpu().permute(1,2,0).numpy()
@@ -192,14 +215,7 @@ ax[1,1].imshow(msk)
 ax[1,1].set_title(f"Target density map (integral/d: {msk.sum().item()/100:.2f})")
 plt.tight_layout()
 plt.show()
+
 # %%
-msk_out.min(), msk_out.max()
-# %%
-tmp = msk_out - msk_out.min()
-# %%
-tmp.min()
-# %%
-plt.imshow(msk_out)
-# %%
-dataset_valid.img_files[5]
+plot_dens_detection(img_d, msk_out)
 # %%

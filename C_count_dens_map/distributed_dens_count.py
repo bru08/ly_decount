@@ -65,6 +65,7 @@ def main():
     mp.spawn(train, nprocs=settings["N_GPUS"], args=(settings,)) 
 
 
+
 def train(gpu, settings):
 
 
@@ -87,7 +88,7 @@ def train(gpu, settings):
     	backend='nccl',                                         
    		init_method='env://',                                   
     	world_size=world_size,                              
-    	rank=rank                                               
+    	rank=rank,                                            
     )  
     print(f"process on gpu {gpu} has started")
 
@@ -131,6 +132,7 @@ def train(gpu, settings):
         num_workers=0, pin_memory=True, sampler=valid_sampler
         )
     # %%
+    
     if PRETRAIN == "imagenet":
         model = smp.Unet(ENCODER_ARCH, encoder_weights=PRETRAIN, decoder_attention_type="scse")
         print("Loaded model pretrained on imagenet")
@@ -217,7 +219,7 @@ def train(gpu, settings):
                 f"\rEpoch {epoch + 1}/{EPOCHS} ({i+1}/{len(loader_train)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
                 end="", flush=True
                 )
-            # store losses
+                # store losses
             losses_tr["segment"].append(segm_loss.item())
             losses_tr["conserv"].append(conservation_loss.item())
 

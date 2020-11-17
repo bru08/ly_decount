@@ -131,17 +131,36 @@ if PRETRAIN == "lysto":
 
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+#torch.cuda.set_device(0)
+
+
+
+
+segm_criterion = torch.nn.MSELoss()
+prob_cons_criterion = torch.nn.L1Loss()
+
+# %%
+
+# warmp up 
+start_ep = 0
+if args.resume:
+    checkpoint = torch.load(args.resume)
+    model.load_state_dict(checkpoint["model"])
+    #optimizer.load_state_dict(checkpoint["optimizer"])
+    print(f"loaded checkpoint {args.resume}")
+    start_ep = checkpoint["epochs"]
+
+model = nn.DataParallel(model)
+model.cuda(0)
 
 if FREEZE_ENCODER:
-    for param in model.encoder.parameters():
+    for param in model.module.encoder.parameters():
         param.requires_grad = False
 
 param_groups = [
-                  {'params': model.encoder.parameters(), 'lr':LR*1e-2},
-                  {'params': model.decoder.parameters(), 'lr':LR},
-                  {'params': model.segmentation_head.parameters(), 'lr':LR}
-]
+                  {'params': model.module.encoder.parameters(), 'lr':LR*1e-2},
+                  {'params': model.module.decoder.parameters(), 'lr':LR},
+                  {'params': model.module.segmentation_head.parameters(), 'lr':LR}]
 
 if OPTIMIZER == "adam":
     optimizer = torch.optim.Adam(param_groups)
@@ -149,24 +168,12 @@ else:
     raise ValueError("Specified optimizer not implemented")
 
 
-segm_criterion = torch.nn.MSELoss()
-prob_cons_criterion = torch.nn.L1Loss()
-
-# %%
-# warmp up 
-start_ep = 0
-if args.resume:
-    checkpoint = torch.load(args.resume)
-    model.load_state_dict(checkpoint["model"])
-    optimizer.load_state_dict(checkpoint["optimizer"])
-    print(f"loaded checkpoint {args.resume}")
-    start_ep = checkpoint["epochs"]
-else:
+if not args.resume:
     print("Warm up...")
     for i, (img, mask) in enumerate(loader_train):
         print(f"\rWarming up {i+1}/{len(loader_train)}", end="", flush=True)
-        img = img.to(device).float()
-        mask = mask.to(device).unsqueeze(1).float()
+        img = img.cuda().float()
+        mask = mask.cuda().unsqueeze(1).float()
         out = model(img)
         segm_loss = segm_criterion(out, mask)
         optimizer.zero_grad()
@@ -192,8 +199,8 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         if TRIAL_RUN and i>3:
             break
         # move data to device
-        img = img.to(device).float()
-        mask = mask.to(device).unsqueeze(1).float()
+        img = img.cuda().float()
+        mask = mask.cuda().unsqueeze(1).float()
 
         # run inference
         out = model(img)
@@ -219,57 +226,58 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         writer.add_scalar("segmentation_loss/Train", segm_loss.item(), epoch * len(loader_train) + i)
         writer.add_scalar("regression_loss/Train", conservation_loss.item(), epoch * len(loader_train) + i)
 
-    print("\nValidation step...")
-    model.eval()
-    with torch.no_grad():
-        reg_met = dict(pred=[],trgt=[])
+    if not epoch%3:
+        print("\nValidation step...")
+        model.eval()
+        with torch.no_grad():
+            reg_met = dict(pred=[],trgt=[])
 
-        for j, (img, mask) in enumerate(loader_valid):
-            if TRIAL_RUN and j>3:
-                break
-            # move data to device
-            img = img.to(device).float()
-            mask = mask.to(device).unsqueeze(1).float()
+            for j, (img, mask) in enumerate(loader_valid):
+                if TRIAL_RUN and j>3:
+                    break
+                # move data to device
+                img = img.cuda().float()
+                mask = mask.cuda().unsqueeze(1).float()
 
-            # run inference
-            out = model(img)
-            # compute losses
-            segm_loss = segm_criterion(out, mask)
-            conservation_loss = prob_cons_criterion(out.sum(dim=[1,2,3]), mask.sum(dim=[1,2,3]))
-
-
-            counts_pred = out.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
-            counts_gt = mask.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
-            reg_met["pred"].extend(counts_pred)
-            reg_met["trgt"].extend(counts_gt)
-
-            # store losses
-            losses_val["segment"].append(segm_loss.item())
-            losses_val["conserv"].append(conservation_loss.item())
-            writer.add_scalar("segmentation_loss/Valid", segm_loss.item(), epoch * len(loader_valid) + j)
-            writer.add_scalar("regression_loss/Valid", conservation_loss.item(), epoch * len(loader_valid) + j)
+                # run inference
+                out = model(img)
+                # compute losses
+                segm_loss = segm_criterion(out, mask)
+                conservation_loss = prob_cons_criterion(out.sum(dim=[1,2,3]), mask.sum(dim=[1,2,3]))
 
 
-            # log 
-            print(
-                f"\rValid epoch {epoch + 1}/{EPOCHS + start_ep} ({j+1}/{len(loader_valid)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
-                end="", flush=True
-                )
-        cae, mae, mse = compute_reg_metrics(reg_met)
-        qk, mcc, acc = compute_cls_metrics(reg_met)
-        writer.add_scalar("metrics/cae", cae, epoch)
-        writer.add_scalar("metrics/mae", mae, epoch)
-        writer.add_scalar("metrics/mse", mse, epoch)
-        writer.add_scalar("metrics/qkappa", qk, epoch)
-        writer.add_scalar("metrics/mcc", mcc, epoch)
-        writer.add_scalar("metrics/accuracy",acc,epoch)
+                counts_pred = out.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
+                counts_gt = mask.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
+                reg_met["pred"].extend(counts_pred)
+                reg_met["trgt"].extend(counts_gt)
 
-    
+                # store losses
+                losses_val["segment"].append(segm_loss.item())
+                losses_val["conserv"].append(conservation_loss.item())
+                writer.add_scalar("segmentation_loss/Valid", segm_loss.item(), epoch * len(loader_valid) + j)
+                writer.add_scalar("regression_loss/Valid", conservation_loss.item(), epoch * len(loader_valid) + j)
+
+
+                # log 
+                print(
+                    f"\rValid epoch {epoch + 1}/{EPOCHS + start_ep} ({j+1}/{len(loader_valid)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
+                    end="", flush=True
+                    )
+            cae, mae, mse = compute_reg_metrics(reg_met)
+            qk, mcc, acc = compute_cls_metrics(reg_met)
+            writer.add_scalar("metrics/cae", cae, epoch)
+            writer.add_scalar("metrics/mae", mae, epoch)
+            writer.add_scalar("metrics/mse", mse, epoch)
+            writer.add_scalar("metrics/qkappa", qk, epoch)
+            writer.add_scalar("metrics/mcc", mcc, epoch)
+            writer.add_scalar("metrics/accuracy",acc,epoch)
+
+        
 
 
     # save checkpoint
     last_checkpoint = {
-        "model":model.state_dict(),
+        "model":model.module.state_dict(),
         "optimizer":optimizer.state_dict(),
         "losses_tr":losses_tr,
         "losses_val":losses_val,
