@@ -63,6 +63,9 @@ parser.add_argument('-dr', '--diagnostic-run',      default=False, type=bool, he
 parser.add_argument('-lr', '--learning-rate',       default=1e-3, type=float)
 parser.add_argument('-o', '--optimizer',            default="adam", type=str)
 parser.add_argument('-ua', '--decoder-scse',        default=True, type=bool, help="whether to use scse attention blocks in UNet decoder")
+parser.add_argument('-lre', '--lr-coef-encoder',     default=1e-2, type=float, help="Downscale factor for encoder")
+parser.add_argument('-nt', '--notes',               default="", type=str, help="Optional: notes about the run")
+parser.add_argument('-lrf', '--lr-scheduler-factor',    default=1.0, type=float, help="Downscale lr factor for lr scheduler on plateau")
 args = parser.parse_args()
 
 # use the cl arguments
@@ -78,6 +81,8 @@ BATCH_SIZE = args.batch_size
 LBL_SIGMA = args.label_sigma
 SCSE = args.decoder_scse
 OPTIMIZER = args.optimizer
+DF_ENC = args.lr_coef_encoder
+LR_FACTOR = args.lr_scheduler_factor
 
 # set up logging folders/files
 timestamp = str(datetime.today().isoformat())
@@ -158,7 +163,7 @@ if FREEZE_ENCODER:
         param.requires_grad = False
 
 param_groups = [
-                  {'params': model.module.encoder.parameters(), 'lr':LR*1e-2},
+                  {'params': model.module.encoder.parameters(), 'lr':LR*DF_ENC},
                   {'params': model.module.decoder.parameters(), 'lr':LR},
                   {'params': model.module.segmentation_head.parameters(), 'lr':LR}]
 
@@ -167,6 +172,7 @@ if OPTIMIZER == "adam":
 else:
     raise ValueError("Specified optimizer not implemented")
 
+lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=LR_FACTOR)
 
 if not args.resume:
     print("Warm up...")
@@ -214,6 +220,7 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        
 
         # log 
         print(
@@ -226,12 +233,13 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         writer.add_scalar("segmentation_loss/Train", segm_loss.item(), epoch * len(loader_train) + i)
         writer.add_scalar("regression_loss/Train", conservation_loss.item(), epoch * len(loader_train) + i)
 
-    if not epoch%3:
+    if True:
         print("\nValidation step...")
         model.eval()
         with torch.no_grad():
             reg_met = dict(pred=[],trgt=[])
-
+            loss_segm = []
+            loss_reg = []
             for j, (img, mask) in enumerate(loader_valid):
                 if TRIAL_RUN and j>3:
                     break
@@ -250,10 +258,11 @@ for epoch in range(start_ep, EPOCHS + start_ep):
                 counts_gt = mask.sum(dim=[1,2,3]).detach().cpu().numpy() / 100.
                 reg_met["pred"].extend(counts_pred)
                 reg_met["trgt"].extend(counts_gt)
+                loss_segm.append(segm_loss.item())
+                loss_reg.append(conservation_loss.item())
 
                 # store losses
-                losses_val["segment"].append(segm_loss.item())
-                losses_val["conserv"].append(conservation_loss.item())
+                
                 writer.add_scalar("segmentation_loss/Valid", segm_loss.item(), epoch * len(loader_valid) + j)
                 writer.add_scalar("regression_loss/Valid", conservation_loss.item(), epoch * len(loader_valid) + j)
 
@@ -263,6 +272,8 @@ for epoch in range(start_ep, EPOCHS + start_ep):
                     f"\rValid epoch {epoch + 1}/{EPOCHS + start_ep} ({j+1}/{len(loader_valid)}) loss:{loss.item():.4f}|segm_loss:{segm_loss.item():.2f} |cons_loss: {conservation_loss.item():.2f}",
                     end="", flush=True
                     )
+            losses_val["segment"].append(np.mean(loss_segm))
+            losses_val["conserv"].append(np.mean(loss_reg))
             cae, mae, mse = compute_reg_metrics(reg_met)
             qk, mcc, acc = compute_cls_metrics(reg_met)
             writer.add_scalar("metrics/cae", cae, epoch)
@@ -271,6 +282,9 @@ for epoch in range(start_ep, EPOCHS + start_ep):
             writer.add_scalar("metrics/qkappa", qk, epoch)
             writer.add_scalar("metrics/mcc", mcc, epoch)
             writer.add_scalar("metrics/accuracy",acc,epoch)
+
+    # update learning rate on possible plateau with segmentation loss
+    lr_scheduler.step(losses_val["segment"][-1])
 
         
 

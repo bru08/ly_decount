@@ -23,3 +23,14 @@ python dens_count_parallel.py -g 0,1 -en efficientnet-b0 -f True -s 6 -bs 52
 
 
 python dens_count_parallel.py -g 2,3 -en efficientnet-b4 -f True -s 6 -bs 52
+
+
+python dens_count_parallel.py -g 0,1 -en efficientnet-b3 -f True -s 5 -bs 32
+
+### efficientnet b3 full open
+
+python dens_count_parallel.py -g 2,3 -en efficientnet-b3 -f False -s 5 -bs 16 -r /home/papa/ly_decount/C_count_dens_map/experiments/dens_count_efficientnet-b3_imagenet_ep_240_bs_18_resume_2020-11-17T02:39:07.243330/last.pth -lre 1.0
+
+## efficientnet b3 frozen from imagenet and lower sigma and lr scheduler
+
+python dens_count_parallel.py -g 2,3 -en efficientnet-b3 -f True -s 4 -bs 32

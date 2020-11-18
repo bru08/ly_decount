@@ -29,6 +29,7 @@ from torch.utils.data import Dataset, DataLoader
 from scipy.ndimage import gaussian_filter
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from utils import load_lysto_weights, dens_map_to_detection, plot_dens_detection
 
 from scipy import ndimage as ndi
 from skimage.segmentation import watershed
@@ -37,51 +38,6 @@ from skimage import (
     color, feature, filters, measure, morphology, segmentation, util
 )
 # %%
-
-def load_lysto_weights(model, state_path):
-    assert ENCODER_ARCH == "resnet50"
-    state = torch.load(state_path)["model_state"]
-    #
-    state_keys = [x for x in state.keys() if x.startswith("base_modules")]
-    model_keys = list(model.encoder.state_dict().keys())
-    #
-    state_renamed = OrderedDict()
-    for i, skey in enumerate(state_keys[1:]):
-        try:
-            state_renamed[model_keys[i+1]] = state[skey]
-        except Exception as e:
-            print(e)
-    # needed for toch segmentation models that by defualt assume resnets have fc layers at the end
-    state_renamed["fc.bias"] = 1
-    state_renamed["fc.weight"] = 1
-    #
-    model.encoder.load_state_dict(state_renamed, strict=False)
-    print("Succesfully converted and loaded resnet50 weights from lysto pretraining")
-
-def dens_map_to_detection(mask):
-    # threshold mask
-    t = filters.threshold_otsu(msk_out)
-    lymph = msk_out > t
-    # watershed transform
-    distance = ndi.distance_transform_edt(lymph)
-    local_maxi = peak_local_max(distance, indices=False, min_distance=7)
-    markers = measure.label(local_maxi)
-    segmented_cells = watershed(-distance, markers, mask=lymph)
-    # center for each connected components
-    centers = []
-    for elem in np.unique(segmented_cells):
-        if elem != 0:
-            centers.append(np.argwhere(segmented_cells==elem).mean(axis=0))
-    centers = np.array(centers)
-    return centers
-
-def plot_dens_detection(img, mask):
-    centers = dens_map_to_detection(mask)
-    plt.figure(figsize=(7,7))
-    plt.imshow(img)
-    plt.scatter(*centers.T[::-1], marker="+", c="green", s=50)
-    plt.title(f"Detected objects: {len(centers)}")
-    plt.show()
 
 # %%
 ENCODER_ARCH = "resnet50"
@@ -195,7 +151,7 @@ plt.plot(checkpoint["losses_tr"]["conserv"])
 #plt.yscale("log")
 # %%
 #### TRY INFERENCE
-img , msk = dataset_valid[50]
+img , msk = dataset_valid[6]
 # %%
 model.eval()
 with torch.no_grad():
@@ -204,6 +160,7 @@ with torch.no_grad():
 fig, ax = plt.subplots(ncols=2,nrows=2, figsize=(12,12))
 img_d = img.cpu().permute(1,2,0).numpy()
 msk_out = out.squeeze().cpu().numpy()
+msk = msk.numpy()
 ax[0,0].imshow(img_d)
 ax[0,0].imshow(msk_out>msk_out.max()*0.2, alpha=0.7)
 ax[0,0].set_title("Image and density map overlay thresholded 0.3*max")
@@ -218,4 +175,117 @@ plt.show()
 
 # %%
 plot_dens_detection(img_d, msk_out)
+# %%
+# detection metrics
+
+# get hte points
+gt = dens_map_to_detection(msk)
+pred = dens_map_to_detection(msk_out)
+# %%
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial import distance_matrix
+from scipy.spatial.distance import euclidean
+print(gt.shape, pred.shape)
+plt.figure(figsize=(6,6))
+plt.imshow(img_d, alpha=0.8)
+plt.scatter(*pred.T[::-1], c="orange", marker="+")
+plt.scatter(*gt.T[::-1], s=60, edgecolor="green", facecolor="none", linewidths=2)
+# %%
+m = distance_matrix(gt, pred, p=2)
+m.shape
+# %%
+res = linear_sum_assignment(m)
+# %%
+res
+# %%
+from matplotlib import cm
+matches = []
+dist_rejected = 0
+for i in range(len(gt)):
+    try:
+        gt_m = gt[res[0][i]]
+        pred_m = pred[res[1][i]]
+        if euclidean(gt_m, pred_m) < 20:
+            group = np.array([gt_m, pred_m])
+            matches.append(group)
+        else:
+            dist_rejected +=1
+    except IndexError:
+        pass
+
+def match_det(gt, pred, d_th=15):
+    m = distance_matrix(gt, pred, p=2)
+    res = linear_sum_assignment(m)
+    matches = []
+    dist_rejected = 0
+    for i in range(len(gt)):
+        try:
+            gt_m = gt[res[0][i]]
+            pred_m = pred[res[1][i]]
+            if euclidean(gt_m, pred_m) < d_th:
+                group = np.array([gt_m, pred_m])
+                matches.append(group)
+            else:
+                dist_rejected +=1
+        except IndexError:
+            pass
+    return matches
+
+
+
+print(f"Target objects : {len(gt)}")
+print(f"Detections: {len(pred)}")
+print(f"Matched : {len(matches)}")
+print(f"Rejected matches based on distance threshold: {dist_rejected}")
+print(f"Unmatched predictions: {len(pred) - len(matches) - dist_rejected}")
+print(f"Unmatched ground truths: {len(gt) - len(matches)}")
+
+# %%
+plt.figure(figsize=(7,7))
+plt.imshow(img_d, alpha=0.7)
+
+colors = cm.tab10.colors
+
+for i, elem in enumerate(matches):
+    k = i%len(colors)
+    plt.scatter(*elem[0].T[::-1], s=50, alpha=0.4, color=colors[k])
+    plt.scatter(*elem[1].T[::-1], s=50, marker="+", color=colors[k])
+
+# %%
+recall = len(matches) / len(gt)
+precision = len(matches) / len(pred)
+f_one = 2 / (1/recall + 1/precision)
+print(precision, recall, f_one)
+
+# %%
+# compute metrics on the validation set for this obj det
+metrics = dict(precision=[], recall=[], f1=[])
+model.eval()
+with torch.no_grad():
+    for i, (img , msk) in enumerate(dataset_valid):
+        print(f"\r{i+1}/{len(dataset_valid)}", end="", flush=True)
+        msk_out = model(img.unsqueeze(0).to(device)).detach()
+        # compute detections
+        gt = dens_map_to_detection(msk.numpy())
+        pred = dens_map_to_detection(msk_out.cpu().squeeze().numpy())
+        # matching
+        if pred.shape[0] and gt.shape[0]:
+            matches = match_det(gt, pred)
+            # compute metrics and append
+            recall = len(matches) / len(gt) if len(gt) else 0
+            precision = len(matches) / len(pred) if len(pred) else 0 
+            f_one = 2 / (1/(recall + 1e-6) + 1/(precision+1e-6))
+            #
+        else:
+            precision, recall, f_one = 0,0,0
+
+        metrics["recall"].append(recall)
+        metrics["precision"].append(precision)
+        metrics["f1"].append(f_one)
+# %%
+print("Average metrics over validation set")
+for k,v in metrics.items():
+    print(f"{k}: {np.mean(v)}")
+
+
 # %%
