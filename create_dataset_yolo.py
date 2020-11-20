@@ -19,7 +19,7 @@ l_class_id = 0
 TRAIN_PROP = 0.75
 
 # set folder for origin annotations, extracted tiles and destination folder
-IMG_DS_DIR = Path("/home/riccardi/neuroblastoma_project_countCD3/output_extraction/CD_3")
+IMG_DS_DIR = Path("/home/riccardi/neuroblastoma_project_countCD3/grid_tile_extration/1_grid_tile_extraction_for_annotations/output_extraction/CD_3")
 RAW_ANNOTATIONS_DIR = Path(__file__).parent / "annotations_nb_opbg"
 DS_DIR = Path(__file__).parent / "dataset_nb_yolo"
 

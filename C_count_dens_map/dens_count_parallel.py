@@ -35,7 +35,11 @@ from albumentations.pytorch import ToTensorV2
 from datetime import datetime
 from metrics import compute_cls_metrics, compute_reg_metrics
 from datasets import DMapData
-from utils import load_lysto_weights
+from utils import load_lysto_weights, compute_det_metrics
+
+from mish.ranger import Ranger
+from mish.rangerlars import RangerLars
+
 
 
 # %%
@@ -57,15 +61,18 @@ parser.add_argument('-p', '--weights',              default='imagenet', type=str
 parser.add_argument('-r', '--resume',               default='', type=str, help="path to checkpoint to use to resume trainig")
 parser.add_argument('-f', '--freeze-encoder',       default=False, type=bool)
 parser.add_argument('-s', '--label-sigma',          default=1, type=float, help="gauss kernel sigma applied to label mask")
-parser.add_argument('-d', '--label-value',          default=100, type=float, help="initialization value for pixel with annotation")
+#parser.add_argument('-d', '--label-value',          default=100, type=float, help="initialization value for pixel with annotation")
 parser.add_argument('-bs', '--batch-size',          default=16, type=int)
 parser.add_argument('-dr', '--diagnostic-run',      default=False, type=bool, help="whether to run just few iteration to see if everything is working")
 parser.add_argument('-lr', '--learning-rate',       default=1e-3, type=float)
-parser.add_argument('-o', '--optimizer',            default="adam", type=str)
+parser.add_argument('-o', '--optimizer',            default="adam", type=str, help="Optimizer to use either adam or ranger or rangerlars")
 parser.add_argument('-ua', '--decoder-scse',        default=True, type=bool, help="whether to use scse attention blocks in UNet decoder")
-parser.add_argument('-lre', '--lr-coef-encoder',     default=1e-2, type=float, help="Downscale factor for encoder")
+parser.add_argument('-lre', '--lr-coef-encoder',    default=1e-2, type=float, help="Downscale factor for encoder")
 parser.add_argument('-nt', '--notes',               default="", type=str, help="Optional: notes about the run")
-parser.add_argument('-lrf', '--lr-scheduler-factor',    default=1.0, type=float, help="Downscale lr factor for lr scheduler on plateau")
+parser.add_argument('-lrf', '--lr-scheduler-factor',default=1.0, type=float, help="Downscale lr factor for lr scheduler on plateau")
+parser.add_argument('-a', '--activation',           default="relu", type=str, help="Activation function either: relu or mish")
+parser.add_argument('-sh', '--saturation-hue-jitter', default=0.1, type=float, help="Color jitter parameter for hue and saturation in data augmentation")
+
 args = parser.parse_args()
 
 # use the cl arguments
@@ -83,6 +90,7 @@ SCSE = args.decoder_scse
 OPTIMIZER = args.optimizer
 DF_ENC = args.lr_coef_encoder
 LR_FACTOR = args.lr_scheduler_factor
+SH_FACTOR = args.saturation_hue_jitter
 
 # set up logging folders/files
 timestamp = str(datetime.today().isoformat())
@@ -105,7 +113,7 @@ with open(EXP_DIR / "settings.json", "w") as fp:
 # define albumentations transpose
 # execution is first to last
 transforms = A.Compose([
-    A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05, always_apply=False, p=0.99),
+    A.ColorJitter(brightness=0.1, contrast=0.1, saturation=SH_FACTOR, hue=SH_FACTOR, always_apply=True),
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.5),
     ToTensorV2(),
@@ -153,7 +161,7 @@ if args.resume:
     model.load_state_dict(checkpoint["model"])
     #optimizer.load_state_dict(checkpoint["optimizer"])
     print(f"loaded checkpoint {args.resume}")
-    start_ep = checkpoint["epochs"]
+    start_ep = checkpoint["epochs"]   
 
 model = nn.DataParallel(model)
 model.cuda(0)
@@ -167,16 +175,26 @@ param_groups = [
                   {'params': model.module.decoder.parameters(), 'lr':LR},
                   {'params': model.module.segmentation_head.parameters(), 'lr':LR}]
 
+# choosing the optimizer
 if OPTIMIZER == "adam":
     optimizer = torch.optim.Adam(param_groups)
+elif OPTIMIZER == "ranger":
+    optimizer = Ranger(param_groups)
+elif OPTIMIZER == "rangerlars":
+    optimizer = RangerLars(param_groups)
 else:
     raise ValueError("Specified optimizer not implemented")
 
-lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=LR_FACTOR)
+# setting up lr scheduler
+if LR_FACTOR<1.0:
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=LR_FACTOR)
 
 if not args.resume:
     print("Warm up...")
     for i, (img, mask) in enumerate(loader_train):
+        if TRIAL_RUN:
+            break
+
         print(f"\rWarming up {i+1}/{len(loader_train)}", end="", flush=True)
         img = img.cuda().float()
         mask = mask.cuda().unsqueeze(1).float()
@@ -238,6 +256,7 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         model.eval()
         with torch.no_grad():
             reg_met = dict(pred=[],trgt=[])
+            # det_metrics = dict(precision=[], recall=[], f1=[])
             loss_segm = []
             loss_reg = []
             for j, (img, mask) in enumerate(loader_valid):
@@ -260,6 +279,17 @@ for epoch in range(start_ep, EPOCHS + start_ep):
                 reg_met["trgt"].extend(counts_gt)
                 loss_segm.append(segm_loss.item())
                 loss_reg.append(conservation_loss.item())
+                # compute det metrics
+                # mask = mask.cpu().squeeze().numpy()
+                # pred = out.detach().cpu().squeeze().numpy()
+                # for k in range(out.shape[0]):
+                #     msk_pred = pred[k]
+                #     msk_gt = mask[k]
+                #     #print(msk_pred.shape, msk_gt.shape, type(msk_pred), type(msk_gt))
+                #     prec, rec, f1 = compute_det_metrics(msk_gt, msk_pred)
+                #     det_metrics['precision'].append(prec)
+                #     det_metrics['recall'].append(rec)
+                #     det_metrics["f1"].append(f1)
 
                 # store losses
                 
@@ -282,9 +312,13 @@ for epoch in range(start_ep, EPOCHS + start_ep):
             writer.add_scalar("metrics/qkappa", qk, epoch)
             writer.add_scalar("metrics/mcc", mcc, epoch)
             writer.add_scalar("metrics/accuracy",acc,epoch)
+            # writer.add_scalar("metrics/precision_10px", np.mean(det_metrics["precision"]), epoch)
+            # writer.add_scalar("metrics/recall_10px", np.mean(det_metrics["recall"]), epoch)
+            # writer.add_scalar("metrics/f1_10px", np.mean(det_metrics["f1"]), epoch)
 
     # update learning rate on possible plateau with segmentation loss
-    lr_scheduler.step(losses_val["segment"][-1])
+    if LR_FACTOR<1.0:
+        lr_scheduler.step(losses_val["segment"][-1])
 
         
 

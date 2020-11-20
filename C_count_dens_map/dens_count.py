@@ -18,8 +18,7 @@ import json
 from torch import nn
 import time
 import re
-import torchvision
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
 import segmentation_models_pytorch as smp
 from collections import OrderedDict
 import matplotlib.pyplot as plt
@@ -35,7 +34,7 @@ from albumentations.pytorch import ToTensorV2
 from datetime import datetime
 from metrics import compute_cls_metrics, compute_reg_metrics
 from datasets import DMapData
-from utils import load_lysto_weights
+from utils import load_lysto_weights, TopLoss
 
 
 # %%
@@ -82,7 +81,7 @@ OPTIMIZER = args.optimizer
 # set up logging folders/files
 timestamp = str(datetime.today().isoformat())
 exp_title = f"dens_count_{ENCODER_ARCH}_{PRETRAIN}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{'resume' if args.resume else 'scratch'}_{timestamp}"
-writer = SummaryWriter(log_dir=f"./tb_runs/{exp_title}")
+#writer = SummaryWriter(log_dir=f"./tb_runs/{exp_title}")
 EXP_DIR = BASE_DIR / "experiments" / exp_title
 os.makedirs(EXP_DIR, exist_ok=False)
 
@@ -151,6 +150,7 @@ else:
 
 segm_criterion = torch.nn.MSELoss()
 prob_cons_criterion = torch.nn.L1Loss()
+top_criterion = TopLoss((512,512))
 
 # %%
 # warmp up 
@@ -216,8 +216,8 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         # store losses
         losses_tr["segment"].append(segm_loss.item())
         losses_tr["conserv"].append(conservation_loss.item())
-        writer.add_scalar("segmentation_loss/Train", segm_loss.item(), epoch * len(loader_train) + i)
-        writer.add_scalar("regression_loss/Train", conservation_loss.item(), epoch * len(loader_train) + i)
+        #writer.add_scalar("segmentation_loss/Train", segm_loss.item(), epoch * len(loader_train) + i)
+        #writer.add_scalar("regression_loss/Train", conservation_loss.item(), epoch * len(loader_train) + i)
 
     print("\nValidation step...")
     model.eval()
@@ -246,8 +246,8 @@ for epoch in range(start_ep, EPOCHS + start_ep):
             # store losses
             losses_val["segment"].append(segm_loss.item())
             losses_val["conserv"].append(conservation_loss.item())
-            writer.add_scalar("segmentation_loss/Valid", segm_loss.item(), epoch * len(loader_valid) + j)
-            writer.add_scalar("regression_loss/Valid", conservation_loss.item(), epoch * len(loader_valid) + j)
+            #writer.add_scalar("segmentation_loss/Valid", segm_loss.item(), epoch * len(loader_valid) + j)
+            #writer.add_scalar("regression_loss/Valid", conservation_loss.item(), epoch * len(loader_valid) + j)
 
 
             # log 
@@ -257,12 +257,12 @@ for epoch in range(start_ep, EPOCHS + start_ep):
                 )
         cae, mae, mse = compute_reg_metrics(reg_met)
         qk, mcc, acc = compute_cls_metrics(reg_met)
-        writer.add_scalar("metrics/cae", cae, epoch)
-        writer.add_scalar("metrics/mae", mae, epoch)
-        writer.add_scalar("metrics/mse", mse, epoch)
-        writer.add_scalar("metrics/qkappa", qk, epoch)
-        writer.add_scalar("metrics/mcc", mcc, epoch)
-        writer.add_scalar("metrics/accuracy",acc,epoch)
+        #writer.add_scalar("metrics/cae", cae, epoch)
+        #writer.add_scalar("metrics/mae", mae, epoch)
+        #writer.add_scalar("metrics/mse", mse, epoch)
+        #writer.add_scalar("metrics/qkappa", qk, epoch)
+        #writer.add_scalar("metrics/mcc", mcc, epoch)
+        #writer.add_scalar("metrics/accuracy",acc,epoch)
 
     
 

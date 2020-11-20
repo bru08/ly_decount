@@ -34,3 +34,8 @@ python dens_count_parallel.py -g 2,3 -en efficientnet-b3 -f False -s 5 -bs 16 -r
 ## efficientnet b3 frozen from imagenet and lower sigma and lr scheduler
 
 python dens_count_parallel.py -g 2,3 -en efficientnet-b3 -f True -s 4 -bs 32
+
+python dens_count_parallel.py -f True -lrf 1e-2 -g 2,3 -en efficientnet-b3 -s 5 -bs 32 -o ranger -nt efficientnetb3_from_scratch_with_plateau_scheduler_and_rangerlars_as_optimizer
+
+## heavy augmentation
+python dens_count_parallel.py -g 0,1 -en efficientnet-b3 -f False -s 5 -bs 12 -lr 1e-2 -lre 0.1 -lrf 0.5 -sh 0.5 -nt try_with_heav_color_augmentation_lr_scheduler_and_high_lr_start
