@@ -20,8 +20,8 @@ TRAIN_PROP = 0.75
 
 # set folder for origin annotations, extracted tiles and destination folder
 IMG_DS_DIR = Path("/home/riccardi/neuroblastoma_project_countCD3/grid_tile_extration/1_grid_tile_extraction_for_annotations/output_extraction/CD_3")
-RAW_ANNOTATIONS_DIR = Path(__file__).parent / "annotations_nb_opbg"
-DS_DIR = Path(__file__).parent / "dataset_nb_yolo"
+RAW_ANNOTATIONS_DIR = Path(__file__).parent / "annotations_nb_opbg_v2"
+DS_DIR = Path(__file__).parent / "dataset_nb_yolo_v2"
 
 os.makedirs(DS_DIR / "train", exist_ok=True)
 os.makedirs(DS_DIR / "valid", exist_ok=True)
@@ -64,15 +64,17 @@ for i, annf in enumerate(ann_files):
                 norm_coords.append(tmp)
             
             tot_imgs[mode] += 1
+
             os.symlink(IMG_DS_DIR / slide_id / tilename, DS_DIR / mode / tilename)
             
             # write annotation file
             with open(DS_DIR / mode / re.sub(".png", ".txt", tilename), "w+") as f:
                 for coord in norm_coords:
                     f.write(f"{l_class_id},")
-         
+        
                     f.write(",".join([str(x) for x in coord]))
                     f.write("\n")
+           
                 
 print("Dataset created")
 print(f"Tiles: tot: {tot_imgs['train']+tot_imgs['valid']} train: {tot_imgs['train']} val: {tot_imgs['valid']}")

@@ -193,7 +193,7 @@ plt.plot(checkpoint["losses_tr"]["conserv"])
 #plt.yscale("log")
 # %%
 #### TRY INFERENCE
-img , msk = dataset_valid[500]
+img , msk = dataset_valid[10]
 
 model.eval()
 with torch.no_grad():

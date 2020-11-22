@@ -48,8 +48,10 @@ from mish.rangerlars import RangerLars
 # ------------
 
 # fixed settings
-DATASET_DIR = "/home/riccardi/neuroblastoma_project_countCD3/try_yolo_ultralytics/dataset_nb_yolo_trail" 
+DATASET_OPBG_V1 = "/home/papa/ly_decount/dataset_nb_yolo_v1" 
+DATASET_OPBG_V2 = "/home/papa/ly_decount/dataset_nb_yolo_v2"
 BASE_DIR = Path(__file__).parent.resolve()
+SAVE_DIR = Path("/datadisk/neuroblastoma_checkpoints_backup/experiments_dens_map_batch3")
 lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
 
 # command line arguments
@@ -72,7 +74,7 @@ parser.add_argument('-nt', '--notes',               default="", type=str, help="
 parser.add_argument('-lrf', '--lr-scheduler-factor',default=1.0, type=float, help="Downscale lr factor for lr scheduler on plateau")
 parser.add_argument('-a', '--activation',           default="relu", type=str, help="Activation function either: relu or mish")
 parser.add_argument('-sh', '--saturation-hue-jitter', default=0.1, type=float, help="Color jitter parameter for hue and saturation in data augmentation")
-
+parser.add_argument('-d', '--dataset',              default='opbgv2', type=str)
 args = parser.parse_args()
 
 # use the cl arguments
@@ -92,12 +94,22 @@ DF_ENC = args.lr_coef_encoder
 LR_FACTOR = args.lr_scheduler_factor
 SH_FACTOR = args.saturation_hue_jitter
 
+if args.dataset == "opbgv2":
+    DATASET_DIR = DATASET_OPBG_V2
+elif args.datset == "opbgv1":
+    DATASET_DIR = DATASET_OPBG_V1
+else:
+    raise ValueError("Dataset argument not recognised: either opbgv1 or opbgv2")
+
 # set up logging folders/files
 timestamp = str(datetime.today().isoformat())
 exp_title = f"dens_count_{ENCODER_ARCH}_{PRETRAIN}_ep_{EPOCHS}_bs_{BATCH_SIZE}_{'resume' if args.resume else 'scratch'}_{timestamp}"
 writer = SummaryWriter(log_dir=f"./tb_runs/{exp_title}")
-EXP_DIR = BASE_DIR / "experiments" / exp_title
+# TODO occhio che salvo ora sull'altro hard disk direttamente
+EXP_DIR = SAVE_DIR / exp_title
 os.makedirs(EXP_DIR, exist_ok=False)
+
+print(f"Freezend encoder: {args.freeze_encoder}")
 
 # saving settings as json
 with open(EXP_DIR / "settings.json", "w") as fp:
