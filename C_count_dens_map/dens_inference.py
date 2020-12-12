@@ -51,21 +51,21 @@ ENCODER_ARCH = "resnet50"
 PRETRAIN = "lysto" # or lysto - imagenet only for resnet50
 lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
 FREEZE_ENCODER = True
-DATASET_DIR = "/home/papa/ly_decount/dataset_nb_yolo" 
+DATASET_DIR = "/home/papa/ly_decount/dataset_nb_yolo_v2" 
 # checkpoint high augmentations
 #  "/home/papa/ly_decount/C_count_dens_map/experiments/dens_count_efficientnet-b3_imagenet_ep_120_bs_32_scratch_2020-11-19T12:44:06.569185/last.pth"
 # checkpoint best but long training
-#  /datadisk/neuroblastoma_checkpoints_backup/experiments/dens_count_efficientnet-b3_imagenet_ep_120_bs_24_resume_2020-11-18T01:22:59.330088/last.pth
-# checkpoint onesto
-# 
+#  /datadisk/neuroblastoma_checkpoints_backup/experiments_dens_map/dens_count_efficientnet-b3_imagenet_ep_120_bs_24_resume_2020-11-18T01:22:59.330088/last.pth
+# checkpoint opbgv2 best
+#  /datadisk/neuroblastoma_checkpoints_backup/experiments_dens_map_batch3/dens_count_efficientnet-b3_imagenet_ep_120_bs_32_resume_2020-11-22T07:53:03.704015/last.pth
 
 
-checkpoint_path = "/datadisk/neuroblastoma_checkpoints_backup/experiments/dens_count_efficientnet-b3_imagenet_ep_120_bs_24_resume_2020-11-18T01:22:59.330088/last.pth"
+checkpoint_path = "/datadisk/neuroblastoma_checkpoints_backup/experiments_dens_map_batch3/dens_count_efficientnet-b3_imagenet_ep_120_bs_32_resume_2020-11-22T07:53:03.704015/last.pth"
 
 LR = 1e-3
 EPOCHS = 5
 BATCH_SIZE = 16
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # %%
 class DMapData(torch.utils.data.Dataset):
 
@@ -193,43 +193,46 @@ plt.plot(checkpoint["losses_tr"]["conserv"])
 #plt.yscale("log")
 # %%
 #### TRY INFERENCE
-img , msk = dataset_valid[10]
+for idx in range(50,100):
+    print(f"\r{idx}/{50}", end="", flush=True)
+    img , msk = dataset_valid[idx]
 
-model.eval()
-with torch.no_grad():
-    out = model(img.unsqueeze(0).to(device))
+    model.eval()
+    with torch.no_grad():
+        out = model(img.unsqueeze(0).to(device))
 
-fig, ax = plt.subplots(ncols=2,nrows=3, figsize=(12,18))
-img_d = img.cpu().permute(1,2,0).numpy()
-msk_out = out.squeeze().cpu().numpy()
-msk = msk.numpy()
-gt = dens_map_to_detection(msk)
-pred = dens_map_to_detection(msk_out)
-
-
-
-# plotting
-ax[0,0].imshow(img_d)
-ax[0,0].imshow(msk_out>msk_out.max()*0.2, alpha=0.7)
-ax[0,0].set_title("Image and density map overlay thresholded 0.3*max")
-ax[0,1].imshow(msk_out)
-ax[0,1].set_title(f"Predicted density map, (Integral/d; {msk_out.sum().item()/100:.2f})")
-ax[1,0].imshow(img_d)
-ax[1,0].set_title("Input image")
-ax[1,1].imshow(msk)
-ax[1,1].set_title(f"Target density map (integral/d: {msk.sum().item()/100:.2f})")
-
-ax[2,0].imshow(img_d, alpha=0.8)
-ax[2,0].scatter(*gt.T[::-1], s=60, edgecolor="green", facecolor="none", linewidths=2, label="gt")
-ax[2,0].scatter(*pred.T[::-1], c="orange", marker="+", label="pred")
-ax[2,0].legend()
+    fig, ax = plt.subplots(ncols=2,nrows=3, figsize=(16,24))
+    img_d = img.cpu().permute(1,2,0).numpy()
+    msk_out = out.squeeze().cpu().numpy().clip(0)
+    msk = msk.numpy()
+    gt = dens_map_to_detection(msk)
+    pred = dens_map_to_detection(msk_out)
+    t = filters.threshold_otsu(msk_out)
 
 
+    # plotting
+    ax[0,0].imshow(img_d)
+    ax[0,0].imshow(msk_out>t, alpha=0.7)
+    ax[0,0].set_title("Image and density map overlay Otsu threshold")
+    ax[0,1].imshow(msk_out)
+    ax[0,1].set_title(f"Predicted density map ({msk_out.sum().item()/100:.2f})")
+    ax[1,0].imshow(img_d)
+    ax[1,0].set_title("Input image")
+    ax[1,1].imshow(msk)
+    ax[1,1].set_title(f"Target density map ({msk.sum().item()/100:.2f})")
+
+    ax[2,0].imshow(img_d, alpha=0.9)
+    ax[2,0].scatter(*gt.T[::-1], s=60, edgecolor="green", facecolor="none", linewidths=2, label="gt")
+    ax[2,0].scatter(*pred.T[::-1], c="orange", marker="+", label="pred")
+    ax[2,0].set_title(f"Detected: {len(pred)}")
+    ax[2,0].legend()
 
 
-plt.tight_layout()
-plt.show()
 
+
+    plt.tight_layout()
+    plt.savefig(f"./det_example/det_example_val_{idx}")
+    plt.close()
 
 
 # COMPUTE DETECTION METRICS
@@ -278,7 +281,7 @@ print(precision, recall, f_one)
 
 # %%
 # compute metrics on the validation set for this obj det
-match_thresh = 10
+match_thresh = 8
 metrics = dict(precision=[], recall=[], f1=[])
 diff = []
 preds_num = []

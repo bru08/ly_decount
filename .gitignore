@@ -15,4 +15,5 @@ Ranger-Deep-Learning-Optimizer
 *.weights
 *.png
 *.jpg
+*.jpeg
 StainTools

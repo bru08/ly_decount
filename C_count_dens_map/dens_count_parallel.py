@@ -37,8 +37,7 @@ from metrics import compute_cls_metrics, compute_reg_metrics
 from datasets import DMapData
 from utils import load_lysto_weights, compute_det_metrics
 
-from mish.ranger import Ranger
-from mish.rangerlars import RangerLars
+from ranger2020 import Ranger
 
 
 
@@ -52,7 +51,7 @@ DATASET_OPBG_V1 = "/home/papa/ly_decount/dataset_nb_yolo_v1"
 DATASET_OPBG_V2 = "/home/papa/ly_decount/dataset_nb_yolo_v2"
 BASE_DIR = Path(__file__).parent.resolve()
 SAVE_DIR = Path("/datadisk/neuroblastoma_checkpoints_backup/experiments_dens_map_batch3")
-lysto_checkpt_path = "/home/papa/ly_decount/A_lysto_regression/experiments/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
+lysto_checkpt_path = "/datadisk/neuroblastoma_checkpoints_backup/experiments_lysto_regression/2020-11-08T16:43:50_resnetrefb_30ep_freeze_5ep_difflr/last.pth"
 
 # command line arguments
 parser = argparse.ArgumentParser()
@@ -73,8 +72,9 @@ parser.add_argument('-lre', '--lr-coef-encoder',    default=1e-2, type=float, he
 parser.add_argument('-nt', '--notes',               default="", type=str, help="Optional: notes about the run")
 parser.add_argument('-lrf', '--lr-scheduler-factor',default=1.0, type=float, help="Downscale lr factor for lr scheduler on plateau")
 parser.add_argument('-a', '--activation',           default="relu", type=str, help="Activation function either: relu or mish")
-parser.add_argument('-sh', '--saturation-hue-jitter', default=0.1, type=float, help="Color jitter parameter for hue and saturation in data augmentation")
+parser.add_argument('-sh', '--hue-jitter', default=0.1, type=float, help="Color jitter parameter for hue and saturation in data augmentation")
 parser.add_argument('-d', '--dataset',              default='opbgv2', type=str)
+parser.add_argument('-sp', '--save-progress',          default=0, type=int, help="Choose to save checkpoints, 0 means no saving else the num of epoch between each saving")
 args = parser.parse_args()
 
 # use the cl arguments
@@ -92,11 +92,12 @@ SCSE = args.decoder_scse
 OPTIMIZER = args.optimizer
 DF_ENC = args.lr_coef_encoder
 LR_FACTOR = args.lr_scheduler_factor
-SH_FACTOR = args.saturation_hue_jitter
+SH_FACTOR = args.hue_jitter
+SAVE_PROG = args.save_progress
 
 if args.dataset == "opbgv2":
     DATASET_DIR = DATASET_OPBG_V2
-elif args.datset == "opbgv1":
+elif args.dataset == "opbgv1":
     DATASET_DIR = DATASET_OPBG_V1
 else:
     raise ValueError("Dataset argument not recognised: either opbgv1 or opbgv2")
@@ -125,7 +126,7 @@ with open(EXP_DIR / "settings.json", "w") as fp:
 # define albumentations transpose
 # execution is first to last
 transforms = A.Compose([
-    A.ColorJitter(brightness=0.1, contrast=0.1, saturation=SH_FACTOR, hue=SH_FACTOR, always_apply=True),
+    A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=SH_FACTOR, always_apply=True),
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.5),
     ToTensorV2(),
@@ -192,14 +193,16 @@ if OPTIMIZER == "adam":
     optimizer = torch.optim.Adam(param_groups)
 elif OPTIMIZER == "ranger":
     optimizer = Ranger(param_groups)
-elif OPTIMIZER == "rangerlars":
-    optimizer = RangerLars(param_groups)
+elif OPTIMIZER == "adamw":
+    optimizer = torch.optim.AdamW(param_groups, amsgrad=True)
 else:
     raise ValueError("Specified optimizer not implemented")
 
 # setting up lr scheduler
 if LR_FACTOR<1.0:
+    print(f"lr scheduler go.")
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=LR_FACTOR)
+    #lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=LR, steps_per_epoch=len(loader_train), epochs=EPOCHS)
 
 if not args.resume:
     print("Warm up...")
@@ -352,4 +355,6 @@ for epoch in range(start_ep, EPOCHS + start_ep):
         name = "last"
 
     torch.save(last_checkpoint, EXP_DIR / (name + ".pth"))
+    if (SAVE_PROG) and ((epoch % SAVE_PROG) == 0):
+        torch.save(last_checkpoint, EXP_DIR / f"chk_ep_{epoch+1}.pth")
 
