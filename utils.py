@@ -97,6 +97,3 @@ def compute_det_metrics(gt_mask, pred_mask):
         precision, recall, f_one = 0,0,0
     
     return precision, recall, f_one
-
-
-#class CorrelationLoss(torch.nn.Module):

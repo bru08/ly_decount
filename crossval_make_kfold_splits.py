@@ -7,7 +7,6 @@ Perform a small version of dap
 5. make meaningful names to the various runs of the models
 """
 # %%
-# imports
 from pathlib import Path
 import json
 import torch
@@ -15,7 +14,6 @@ import torchvision
 import albumentations as A 
 import numpy as np
 import os
-from sklearn.model_selection import GroupKFold
 
 from datasets import DMapData
 # Initialization
