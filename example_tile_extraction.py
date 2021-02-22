@@ -5,11 +5,13 @@ Create a tiler object and save an image contianing the tile extraction map
 from pathlib import Path
 from PIL import Image
 
+from histolab.data import prostate_tissue
 from histolab.tiler import GridTiler
 from histolab.slide import Slide
 
+prostate_svs, prostate_path = prostate_tissue()
 #TODO CHANGE PATHS HERE!
-SVS_PATH = Path(__file__).parent / 'PDL_6.bif.tif'
+SVS_PATH = prostate_path
 N_TILES = 175
 TILE_SIZE = 512
 EXTRACTION_LVL = 1
@@ -25,7 +27,7 @@ tiler = GridTiler(
     pixel_overlap= 0,
     prefix=  str(Path(__file__).parent / slide_obj.name),
     suffix=".png",
-    partial=0.99,
+    partial=1.0,
     maximum=N_TILES,
 )
 
